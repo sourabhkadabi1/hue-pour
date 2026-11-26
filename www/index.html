@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Hue Pour</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ===== MAIN GAME SCREEN ===== -->
+  <div id="app">
+
+    <!-- HUD -->
+    <header id="hud">
+      <div class="hud-row">
+        <span id="hud-level">Level 1</span>
+        <span id="hud-moves">Moves: 0</span>
+        <span id="hud-par">Par: —</span>
+      </div>
+      <div class="hud-row hud-buttons">
+        <button id="btn-undo"    aria-label="Undo">↩ Undo</button>
+        <button id="btn-restart" aria-label="Restart">⟳ Restart</button>
+        <button id="btn-settings" aria-label="Settings">⚙</button>
+      </div>
+    </header>
+
+    <!-- TARGET PALETTE -->
+    <section id="target-area">
+      <span class="target-label">Make:</span>
+      <div id="target-tubes"></div>
+    </section>
+
+    <!-- TUBE AREA -->
+    <main id="tube-area"></main>
+
+  </div>
+
+  <!-- ===== WIN OVERLAY ===== -->
+  <div id="win-overlay" class="overlay hidden" aria-hidden="true">
+    <div class="overlay-card">
+      <h2>🎉 Level Complete!</h2>
+      <div id="win-stars" class="stars"></div>
+      <p id="win-info"></p>
+      <button id="btn-next">Next Level ▶</button>
+    </div>
+  </div>
+
+  <!-- ===== SETTINGS OVERLAY ===== -->
+  <div id="settings-overlay" class="overlay hidden" aria-hidden="true">
+    <div class="overlay-card">
+      <h2>Settings</h2>
+      <label class="setting-row">
+        <span>Sound</span>
+        <input type="checkbox" id="set-sound" checked>
+        <span class="toggle"></span>
+      </label>
+      <label class="setting-row">
+        <span>Haptics</span>
+        <input type="checkbox" id="set-haptics" checked>
+        <span class="toggle"></span>
+      </label>
+      <label class="setting-row">
+        <span>Colorblind Mode</span>
+        <input type="checkbox" id="set-colorblind">
+        <span class="toggle"></span>
+      </label>
+      <button id="btn-close-settings">Close</button>
+    </div>
+  </div>
+
+  <!-- load scripts: game logic first, then UI -->
+  <script src="game.js"></script>
+  <script src="ui.js"></script>
+</body>
+</html>

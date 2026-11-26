@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">hue pour</string>
+    <string name="title_activity_main">hue pour</string>
+    <string name="package_name">com.sourabh.huepour</string>
+    <string name="custom_url_scheme">com.sourabh.huepour</string>
+</resources>
