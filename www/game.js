@@ -348,3 +348,150 @@ function generateLevel(levelNum, forcedSeed) {
     solverNodeCount: sol ? sol.nodeCount : 0,
   };
 }
+
+
+/* ============================================================
+   NEW: Daily Puzzle, Challenge Codes, Hints
+   ============================================================ */
+
+/* ---------- Daily puzzle ---------- */
+const _DAILY_EPOCH = new Date(2024, 0, 1).getTime(); // Jan 1 2024
+
+function getDayNumber(date) {
+  const d = date || new Date();
+  const local = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return Math.floor((local.getTime() - _DAILY_EPOCH) / 86400000);
+}
+
+function getDailySeed(date) {
+  const d = date || new Date();
+  return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+}
+
+function generateDailyLevel(date) {
+  const seed   = getDailySeed(date);
+  const dayNum = getDayNumber(date);
+
+  for (let attempt = 0; attempt < 80; attempt++) {
+    const s   = seed + attempt;
+    const rng = mulberry32(s);
+
+    // Medium difficulty: 2 target colours
+    const target = [
+      SECONDARIES[Math.floor(rng() * SECONDARIES.length)],
+      ALL_COLORS[Math.floor(rng() * ALL_COLORS.length)],
+    ];
+    const solved    = buildSolvedState(target, 2);
+    const scrambled = scramble(solved, 20, rng);
+
+    if (checkWin(scrambled, target)) continue;
+    const solution = solve(scrambled, target);
+    if (!solution) continue;
+    if (solution.moves.length < 5) continue;
+
+    console.log(
+      'Daily #' + dayNum + ': seed=' + s +
+      ', par=' + solution.moves.length + ', nodes=' + solution.nodeCount
+    );
+    return {
+      dayNum, seed: s, tubes: scrambled, target,
+      par: solution.moves.length, isDaily: true,
+    };
+  }
+  // fallback
+  const fb = generateLevel(10, seed);
+  fb.dayNum  = dayNum;
+  fb.isDaily = true;
+  return fb;
+}
+
+/* ---------- Challenge codes (base-32 with checksum) ---------- */
+const _CODE_ALPHA = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // 32 chars, no 0/1/I/O
+
+function encodeChallenge(seed, difficulty) {
+  var val = seed * 4 + Math.max(0, Math.min(3, (difficulty || 1) - 1));
+  var chars = [];
+  do {
+    chars.push(_CODE_ALPHA[val % 32]);
+    val = Math.floor(val / 32);
+  } while (val > 0);
+  chars.reverse();
+  var sum = 0;
+  for (var i = 0; i < chars.length; i++) sum += _CODE_ALPHA.indexOf(chars[i]);
+  chars.push(_CODE_ALPHA[sum % 32]);
+  return 'HP-' + chars.join('');
+}
+
+function decodeChallenge(code) {
+  var clean = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (clean.length < 4 || clean.slice(0, 2) !== 'HP') return null;
+  var payload = clean.slice(2);
+  if (payload.length < 2) return null;
+
+  var checkChar = payload[payload.length - 1];
+  var data      = payload.slice(0, payload.length - 1);
+
+  var sum = 0;
+  for (var i = 0; i < data.length; i++) {
+    var idx = _CODE_ALPHA.indexOf(data[i]);
+    if (idx < 0) return null;
+    sum += idx;
+  }
+  if (_CODE_ALPHA[sum % 32] !== checkChar) return null;
+
+  var val = 0;
+  for (var i = 0; i < data.length; i++) {
+    val = val * 32 + _CODE_ALPHA.indexOf(data[i]);
+  }
+  var difficulty = (val % 4) + 1;
+  var seed       = Math.floor(val / 4);
+  if (difficulty > 3) return null;
+  return { seed: seed, difficulty: difficulty };
+}
+
+function generateChallengeLevel(seed, difficulty) {
+  var numT = Math.max(1, Math.min(3, difficulty));
+  for (var attempt = 0; attempt < 80; attempt++) {
+    var s   = seed + attempt;
+    var rng = mulberry32(s);
+    var target = [];
+    for (var i = 0; i < numT; i++) {
+      target.push(
+        i === 0
+          ? SECONDARIES[Math.floor(rng() * SECONDARIES.length)]
+          : ALL_COLORS[Math.floor(rng() * ALL_COLORS.length)]
+      );
+    }
+    var empties  = numT <= 2 ? 2 : (rng() > 0.3 ? 2 : 1);
+    var solved   = buildSolvedState(target, empties);
+    var nMoves   = numT === 1 ? 10 : (numT === 2 ? 20 : 35);
+    var scrambled = scramble(solved, nMoves, rng);
+    if (checkWin(scrambled, target)) continue;
+    var solution = solve(scrambled, target);
+    if (!solution) continue;
+    if (solution.moves.length < 3) continue;
+
+    console.log(
+      'Challenge seed=' + s + ' diff=' + numT +
+      ', par=' + solution.moves.length + ', nodes=' + solution.nodeCount
+    );
+    return {
+      seed: s, difficulty: numT, tubes: scrambled, target,
+      par: solution.moves.length, isChallenge: true,
+    };
+  }
+  return null;
+}
+
+/* ---------- Hint (first move of optimal solution) ---------- */
+function getHint(tubes, target) {
+  var solution = solve(tubes, target, 50000);
+  if (!solution || !solution.moves.length) return null;
+  return solution.moves[0]; // { src, dst, type }
+}
+
+/* ---------- Colour emoji for sharing ---------- */
+const COLOR_EMOJI = {
+  RED: '\u{1F7E5}', YELLOW: '\u{1F7E8}', BLUE: '\u{1F7E6}',
+  ORANGE: '\u{1F7E7}', GREEN: '\u{1F7E9}', PURPLE: '\u{1F7EA}',
+};
