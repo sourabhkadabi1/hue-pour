@@ -1,5 +1,5 @@
 /* ============================================================
-   HUE POUR — Styles  (v2: home screen, daily, share, tutorial)
+   HUE POUR — Styles  (v3: canvas liquid, pour animations, layout)
    ============================================================ */
 
 /* ---------- Reset & Base ---------- */
@@ -111,10 +111,17 @@ html, body {
 }
 
 /* ===================================================================
-   GAME SCREEN
+   GAME SCREEN  — centered phone-width column
    =================================================================== */
 #app {
-  display: flex; flex-direction: column; height: 100%;
+  position: relative; height: 100%; width: 100%;
+}
+
+.game-column {
+  max-width: 480px; width: 100%; height: 100%;
+  margin: 0 auto;
+  display: flex; flex-direction: column;
+  position: relative;
 }
 
 /* ---------- HUD ---------- */
@@ -170,15 +177,23 @@ body.colorblind .target-unit .cb { display: flex; }
 /* ---------- Tube Area ---------- */
 #tube-area {
   flex: 1; display: flex; align-items: center; justify-content: center;
-  gap: 12px; flex-wrap: wrap; padding: 10px 8px; min-height: 0;
+  gap: var(--tube-gap, 12px); flex-wrap: wrap; padding: 10px 8px; min-height: 0;
+  align-content: center;
 }
 
 /* ---------- Tube ---------- */
 .tube-wrapper {
   display: flex; flex-direction: column; align-items: center;
   cursor: pointer; transition: transform 0.18s ease;
+  position: relative;
 }
-.tube-wrapper.selected { transform: translateY(-14px); }
+
+/* Selected: float up with gentle bobbing */
+.tube-wrapper.selected {
+  animation: bobbing 0.9s ease-in-out infinite;
+  z-index: 10;
+}
+
 .tube-wrapper.shake { animation: shake 0.35s ease; }
 .tube-wrapper.hint-src,
 .tube-wrapper.hint-dst {
@@ -192,52 +207,72 @@ body.colorblind .target-unit .cb { display: flex; }
   50%      { filter: drop-shadow(0 0 14px rgba(79,195,247,0.9)); }
 }
 
+@keyframes bobbing {
+  0%, 100% { transform: translateY(-12px); }
+  50%      { transform: translateY(-18px); }
+}
+
 .tube {
-  width: 52px; height: 168px;
+  width: var(--tube-w, 56px);
+  height: var(--tube-h, 170px);
   border: 2px solid rgba(255,255,255,0.20); border-top: none;
   border-radius: 0 0 20px 20px;
   background: rgba(255,255,255,0.05);
-  display: flex; flex-direction: column-reverse; overflow: hidden;
-  position: relative;
+  position: relative; overflow: hidden;
   box-shadow:
     inset  2px 0 8px rgba(255,255,255,0.06),
     inset -2px 0 8px rgba(255,255,255,0.03),
     0 4px 12px rgba(0,0,0,0.25);
 }
 
-/* Glass highlight strip */
+/* Glass highlight strip left */
 .tube::before {
   content: ''; position: absolute;
   left: 5px; top: 0; bottom: 8px; width: 5px;
   background: linear-gradient(to bottom,
-    rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.04) 60%, transparent 100%);
-  border-radius: 3px; pointer-events: none; z-index: 2;
+    rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.05) 60%, transparent 100%);
+  border-radius: 3px; pointer-events: none; z-index: 4;
+}
+
+/* Glass highlight strip right (subtle) */
+.tube::after {
+  content: ''; position: absolute;
+  right: 6px; top: 10px; bottom: 20px; width: 3px;
+  background: linear-gradient(to bottom,
+    rgba(255,255,255,0.08) 0%, transparent 70%);
+  border-radius: 2px; pointer-events: none; z-index: 4;
 }
 
 /* Tube top rim */
 .tube-wrapper::before {
   content: ''; display: block;
-  width: 60px; height: 5px;
+  width: calc(var(--tube-w, 56px) + 8px); height: 5px;
   border: 2px solid rgba(255,255,255,0.20); border-bottom: none;
   border-radius: 5px 5px 0 0;
   background: rgba(255,255,255,0.05);
 }
 
-/* ---------- Liquid Unit ---------- */
-.liquid-unit {
-  width: 100%; height: 25%; position: relative;
-  transition: opacity 0.25s;
-  display: flex; align-items: center; justify-content: center;
+/* Tube shadow underneath */
+.tube-wrapper::after {
+  content: ''; display: block;
+  width: calc(var(--tube-w, 56px) - 10px); height: 6px;
+  margin-top: 4px;
+  background: radial-gradient(ellipse, rgba(0,0,0,0.3) 0%, transparent 70%);
+  border-radius: 50%;
 }
-.liquid-unit::after {
-  content: ''; position: absolute; inset: 0;
-  background: linear-gradient(135deg,
-    rgba(255,255,255,0.20) 0%, rgba(255,255,255,0.05) 40%, transparent 60%);
-  pointer-events: none;
-}
-.liquid-unit + .liquid-unit { border-top: 1px solid rgba(0,0,0,0.10); }
 
-/* Colorblind symbol */
+/* ---------- Liquid Canvas (inside tube) ---------- */
+.tube-liquid {
+  position: absolute;
+  left: 2px; top: 1px;
+  width: calc(100% - 4px);
+  height: calc(100% - 2px);
+  pointer-events: none;
+  z-index: 1;
+  border-radius: 0 0 18px 18px;
+}
+
+/* ---------- Colorblind symbol ---------- */
 .cb {
   font-size: 13px; font-weight: 900;
   color: rgba(0,0,0,0.40); position: relative; z-index: 1;
@@ -245,23 +280,11 @@ body.colorblind .target-unit .cb { display: flex; }
 }
 body.colorblind .cb { display: block; }
 
-/* ---------- Fusion glow ---------- */
-.liquid-unit.fusing { animation: fuseGlow 0.5s ease; }
-@keyframes fuseGlow {
-  0%   { box-shadow: inset 0 0 0 0 rgba(255,255,255,0); filter: brightness(1); }
-  40%  { box-shadow: inset 0 0 20px 4px rgba(255,255,255,0.6); filter: brightness(1.5); }
-  100% { box-shadow: inset 0 0 0 0 rgba(255,255,255,0); filter: brightness(1); }
-}
-
-/* ---------- Flying unit ---------- */
-.flying-unit {
-  position: fixed; border-radius: 8px; z-index: 100; pointer-events: none;
-  display: flex; align-items: center; justify-content: center;
-  transition: transform 0.35s cubic-bezier(.4,0,.2,1), opacity 0.35s;
-}
-.flying-unit::after {
-  content: ''; position: absolute; inset: 0; border-radius: 8px;
-  background: linear-gradient(135deg, rgba(255,255,255,0.20) 0%, transparent 50%);
+/* ---------- Animation overlay canvas ---------- */
+#anim-overlay {
+  position: fixed; left: 0; top: 0;
+  width: 100vw; height: 100vh;
+  pointer-events: none; z-index: 60;
 }
 
 /* ---------- Shake ---------- */
@@ -409,30 +432,30 @@ body.colorblind .cb { display: block; }
 }
 
 /* ===================================================================
+   REDUCE MOTION / EFFECTS
+   =================================================================== */
+body.reduce-effects .tube-wrapper.selected {
+  animation: none;
+  transform: translateY(-12px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tube-wrapper.selected {
+    animation: none !important;
+    transform: translateY(-12px);
+  }
+  #btn-next { animation: none !important; }
+}
+
+/* ===================================================================
    RESPONSIVE
    =================================================================== */
 @media (max-height: 600px) {
-  .tube { height: 130px; width: 46px; }
-  .tube-wrapper::before { width: 54px; }
   #hud { padding: 4px 10px 2px; }
   .home-title { font-size: 42px; }
 }
 
 @media (max-width: 360px) {
   #tube-area { gap: 8px; }
-  .tube { width: 46px; }
-  .tube-wrapper::before { width: 54px; }
   .hud-btn { padding: 5px 8px; font-size: 12px; }
-}
-
-@media (min-width: 430px) {
-  .tube { width: 60px; height: 188px; }
-  .tube-wrapper::before { width: 68px; }
-  #tube-area { gap: 16px; }
-}
-
-@media (min-width: 500px) {
-  .tube { width: 64px; height: 200px; }
-  .tube-wrapper::before { width: 72px; }
-  #tube-area { gap: 18px; }
 }

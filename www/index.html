@@ -37,38 +37,43 @@
 
   <!-- ===== GAME SCREEN ===== -->
   <div id="app" class="hidden">
+    <div class="game-column">
 
-    <!-- HUD -->
-    <header id="hud">
-      <div class="hud-row">
-        <button id="btn-back" class="hud-btn" aria-label="Home">← </button>
-        <span id="hud-level">Level 1</span>
-        <span id="hud-moves">Moves: 0</span>
-        <span id="hud-par">Par: —</span>
+      <!-- HUD -->
+      <header id="hud">
+        <div class="hud-row">
+          <button id="btn-back" class="hud-btn" aria-label="Home">← </button>
+          <span id="hud-level">Level 1</span>
+          <span id="hud-moves">Moves: 0</span>
+          <span id="hud-par">Par: —</span>
+        </div>
+        <div class="hud-row hud-buttons">
+          <button id="btn-undo" class="hud-btn" aria-label="Undo">↩ Undo <span id="undo-count">(3)</span></button>
+          <button id="btn-hint" class="hud-btn" aria-label="Hint">💡 Hint</button>
+          <button id="btn-restart" class="hud-btn" aria-label="Restart">⟳</button>
+          <button id="btn-settings" class="hud-btn" aria-label="Settings">⚙</button>
+        </div>
+      </header>
+
+      <!-- TARGET PALETTE -->
+      <section id="target-area">
+        <span class="target-label">Make:</span>
+        <div id="target-tubes"></div>
+      </section>
+
+      <!-- TUBE AREA -->
+      <main id="tube-area"></main>
+
+      <!-- TUTORIAL HINT (floating at the bottom) -->
+      <div id="tutorial-bar" class="hidden" role="status">
+        <p id="tutorial-text"></p>
+        <button id="btn-skip-tutorial" class="btn-sm">Skip</button>
       </div>
-      <div class="hud-row hud-buttons">
-        <button id="btn-undo" class="hud-btn" aria-label="Undo">↩ Undo <span id="undo-count">(3)</span></button>
-        <button id="btn-hint" class="hud-btn" aria-label="Hint">💡 Hint</button>
-        <button id="btn-restart" class="hud-btn" aria-label="Restart">⟳</button>
-        <button id="btn-settings" class="hud-btn" aria-label="Settings">⚙</button>
-      </div>
-    </header>
 
-    <!-- TARGET PALETTE -->
-    <section id="target-area">
-      <span class="target-label">Make:</span>
-      <div id="target-tubes"></div>
-    </section>
+    </div><!-- .game-column -->
 
-    <!-- TUBE AREA -->
-    <main id="tube-area"></main>
-
-    <!-- TUTORIAL HINT (floating at the bottom) -->
-    <div id="tutorial-bar" class="hidden" role="status">
-      <p id="tutorial-text"></p>
-      <button id="btn-skip-tutorial" class="btn-sm">Skip</button>
-    </div>
-
+    <!-- Animation overlay canvas (full viewport, above tubes) -->
+    <canvas id="anim-overlay"></canvas>
   </div>
 
   <!-- ===== WIN OVERLAY ===== -->
@@ -132,6 +137,11 @@
       <label class="setting-row">
         <span>Colorblind Mode</span>
         <input type="checkbox" id="set-colorblind">
+        <span class="toggle"></span>
+      </label>
+      <label class="setting-row">
+        <span>Reduce Effects</span>
+        <input type="checkbox" id="set-reduce">
         <span class="toggle"></span>
       </label>
       <div class="settings-divider"></div>

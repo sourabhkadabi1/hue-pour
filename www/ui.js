@@ -1,6 +1,7 @@
 // ============================================================
-// HUE POUR — UI Layer  v2
-// Rendering · Sound · Input · Animations · Daily · Challenge
+// HUE POUR — UI Layer  v3
+// Canvas liquid rendering · Pour/tilt animations · Particles
+// Fusion effects · Sound · Input · Daily · Challenge
 // Tutorial · Share · Monetization integration
 // ============================================================
 'use strict';
@@ -56,6 +57,18 @@ const Sound = (() => {
       g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
       o.connect(g); g.connect(ctx.destination);
       o.start(t); o.stop(t + 0.45);
+    },
+    bloop() {
+      if (!enabled) return;
+      ensure();
+      const o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime;
+      o.type = 'sine';
+      o.frequency.setValueAtTime(400, t);
+      o.frequency.exponentialRampToValueAtTime(180, t + 0.2);
+      g.gain.setValueAtTime(0.22, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(t); o.stop(t + 0.3);
     },
     error() { note(160, 0.12, 'square', 0.07); },
     win() {
@@ -218,6 +231,197 @@ function renderShareCard(info) {
   c.fillText('Can you beat my score?', W / 2, 1700);
 }
 
+/* ========== LIQUID RENDERER (draws liquid bands on a canvas) ========== */
+const LiquidRenderer = (() => {
+  /**
+   * Setup canvas for HiDPI.
+   * @param {HTMLCanvasElement} cvs
+   * @param {number} w CSS width
+   * @param {number} h CSS height
+   */
+  function setup(cvs, w, h) {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cvs.width = w * dpr;
+    cvs.height = h * dpr;
+    cvs.style.width = w + 'px';
+    cvs.style.height = h + 'px';
+    const ctx = cvs.getContext('2d');
+    ctx.scale(dpr, dpr);
+    return ctx;
+  }
+
+  /**
+   * Draw liquid bands into a tube canvas.
+   * @param {HTMLCanvasElement} cvs
+   * @param {Array} bands  [{color, units}]  — units can be fractional
+   * @param {object} opts  { w, h, waveAmp, wavePhase, colorblind }
+   */
+  function draw(cvs, bands, opts) {
+    const w = opts.w, h = opts.h;
+    const ctx = setup(cvs, w, h);
+    ctx.clearRect(0, 0, w, h);
+
+    if (!bands.length) return;
+
+    const totalUnits = bands.reduce((s, b) => s + b.units, 0);
+    if (totalUnits <= 0) return;
+
+    const radius = Math.min(w * 0.35, 18);
+
+    // Draw from bottom up
+    let y = h; // current bottom position
+    for (let bi = 0; bi < bands.length; bi++) {
+      const band = bands[bi];
+      const bandH = (band.units / TUBE_CAPACITY) * h;
+      if (bandH <= 0) continue;
+
+      const top = y - bandH;
+      const isTopBand = (bi === bands.length - 1);
+
+      ctx.save();
+
+      // Clip to tube rounded-bottom shape
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(w, 0);
+      ctx.lineTo(w, h - radius);
+      ctx.quadraticCurveTo(w, h, w - radius, h);
+      ctx.lineTo(radius, h);
+      ctx.quadraticCurveTo(0, h, 0, h - radius);
+      ctx.closePath();
+      ctx.clip();
+
+      // Fill band
+      ctx.fillStyle = COLOR_INFO[band.color].hex;
+      ctx.beginPath();
+
+      if (isTopBand && opts.waveAmp && opts.waveAmp > 0.5) {
+        // Wavy top surface
+        const amp = opts.waveAmp;
+        const phase = opts.wavePhase || 0;
+        ctx.moveTo(0, top);
+        for (let x = 0; x <= w; x += 2) {
+          const wy = top + Math.sin((x / w) * Math.PI * 2 + phase) * amp;
+          ctx.lineTo(x, wy);
+        }
+      } else {
+        ctx.moveTo(0, top);
+        ctx.lineTo(w, top);
+      }
+
+      ctx.lineTo(w, y);
+      ctx.lineTo(0, y);
+      ctx.closePath();
+      ctx.fill();
+
+      // Subtle separator line between bands
+      if (bi > 0) {
+        ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+
+      // Glossy gradient overlay on band
+      const glossGrad = ctx.createLinearGradient(0, top, w * 0.6, top + bandH);
+      glossGrad.addColorStop(0, 'rgba(255,255,255,0.18)');
+      glossGrad.addColorStop(0.4, 'rgba(255,255,255,0.06)');
+      glossGrad.addColorStop(1, 'transparent');
+      ctx.fillStyle = glossGrad;
+      ctx.fillRect(0, top, w, bandH);
+
+      // Colorblind symbol
+      if (opts.colorblind) {
+        const info = COLOR_INFO[band.color];
+        const symSize = Math.min(14, bandH * 0.6);
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        ctx.font = 'bold ' + symSize + 'px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(info.symbol, w / 2, top + bandH / 2);
+      }
+
+      ctx.restore();
+      y = top;
+    }
+  }
+
+  return { setup, draw };
+})();
+
+/* ========== PARTICLE SYSTEM ========== */
+const Particles = (() => {
+  const MAX = 50;
+  let pool = [];
+  let enabled = true;
+
+  function emit(x, y, color, count, opts) {
+    if (!enabled) return;
+    opts = opts || {};
+    const actual = Math.min(count, MAX - pool.length);
+    for (let i = 0; i < actual; i++) {
+      pool.push({
+        x, y,
+        vx: (Math.random() - 0.5) * (opts.spread || 60),
+        vy: -(Math.random() * (opts.upSpeed || 80) + 20),
+        color: color,
+        radius: Math.random() * 2.5 + 1,
+        life: 1,
+        decay: 0.6 + Math.random() * 0.8,
+        gravity: opts.gravity !== undefined ? opts.gravity : 60,
+      });
+    }
+  }
+
+  function update(dt) {
+    for (let i = pool.length - 1; i >= 0; i--) {
+      const p = pool[i];
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += p.gravity * dt;
+      p.life -= p.decay * dt;
+      if (p.life <= 0) pool.splice(i, 1);
+    }
+  }
+
+  function draw(ctx) {
+    for (const p of pool) {
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function clear() { pool.length = 0; }
+  function active() { return pool.length > 0; }
+  function setEnabled(v) { enabled = v; if (!v) clear(); }
+
+  return { emit, update, draw, clear, active, setEnabled };
+})();
+
+/* ========== VISUAL BANDS HELPER ========== */
+function getVisualBands(tube) {
+  if (!tube.length) return [];
+  const bands = [];
+  let cur = tube[0], count = 1;
+  for (let i = 1; i < tube.length; i++) {
+    if (tube[i] === cur) {
+      count++;
+    } else {
+      bands.push({ color: cur, units: count });
+      cur = tube[i];
+      count = 1;
+    }
+  }
+  bands.push({ color: cur, units: count });
+  return bands;
+}
+
 /* ========== APP ========== */
 const App = (() => {
   const $ = id => document.getElementById(id);
@@ -277,9 +481,12 @@ const App = (() => {
     setSound:     $('set-sound'),
     setHaptics:   $('set-haptics'),
     setColorblind:$('set-colorblind'),
+    setReduce:    $('set-reduce'),
     btnRemoveAds: $('btn-remove-ads'),
     btnRestore:   $('btn-restore'),
     btnCloseSettings: $('btn-close-settings'),
+
+    animOverlay: $('anim-overlay'),
   };
 
   /* ---------- State ---------- */
@@ -314,10 +521,71 @@ const App = (() => {
     levelsCompleted: 0,  // total levels completed
   };
 
-  let settings = { sound: true, haptics: true, colorblind: false };
+  let settings = { sound: true, haptics: true, colorblind: false, reduceEffects: false };
   let bestResults = {};
   let dailyData = { streak: 0, lastDate: '', results: {} };
   let tutorialDone = {};
+
+  // Animation state
+  let tubeEls = [];   // [{wrapper, tube, canvas}] - cached DOM references
+  let overlayCtx = null;
+  let animRafId = null;
+  let waves = {};  // tubeIdx -> { amp, phase, vel, lastTime }
+  let lastFrameTime = 0;
+
+  // Pour animation state
+  let pourAnim = null;  // current pour animation data
+
+  /* ---------- Tube sizing ---------- */
+  function computeTubeSize(tubeCount) {
+    const area = dom.tubeArea;
+    const areaW = area.clientWidth - 16; // padding
+    const areaH = area.clientHeight - 20;
+
+    let cols, tubeW;
+    if (tubeCount <= 4) {
+      cols = tubeCount;
+      tubeW = Math.min(90, Math.floor((areaW - (cols - 1) * 12) / cols));
+    } else if (tubeCount <= 6) {
+      cols = tubeCount;
+      tubeW = Math.min(72, Math.floor((areaW - (cols - 1) * 10) / cols));
+    } else {
+      // Two rows
+      cols = Math.ceil(tubeCount / 2);
+      tubeW = Math.min(64, Math.floor((areaW - (cols - 1) * 10) / cols));
+    }
+
+    tubeW = Math.max(42, tubeW);
+    const tubeH = Math.min(Math.floor(tubeW * 2.8), Math.floor(areaH * (tubeCount > 6 ? 0.42 : 0.7)));
+    const gap = Math.max(6, Math.min(14, Math.floor((areaW - cols * tubeW) / Math.max(1, cols - 1))));
+
+    document.documentElement.style.setProperty('--tube-w', tubeW + 'px');
+    document.documentElement.style.setProperty('--tube-h', tubeH + 'px');
+    document.documentElement.style.setProperty('--tube-gap', gap + 'px');
+
+    return { tubeW, tubeH, gap };
+  }
+
+  /* ---------- Overlay canvas ---------- */
+  function initOverlay() {
+    const cvs = dom.animOverlay;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cvs.width = window.innerWidth * dpr;
+    cvs.height = window.innerHeight * dpr;
+    cvs.style.width = window.innerWidth + 'px';
+    cvs.style.height = window.innerHeight + 'px';
+    overlayCtx = cvs.getContext('2d');
+    overlayCtx.scale(dpr, dpr);
+  }
+
+  function clearOverlay() {
+    if (!overlayCtx) return;
+    const cvs = dom.animOverlay;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    overlayCtx.setTransform(1, 0, 0, 1, 0, 0);
+    overlayCtx.clearRect(0, 0, cvs.width, cvs.height);
+    overlayCtx.scale(dpr, dpr);
+  }
 
   /* ---------- Init ---------- */
   function init() {
@@ -327,6 +595,13 @@ const App = (() => {
     bindEvents();
     Monetization.init();
     updateHomeScreen();
+    initOverlay();
+    window.addEventListener('resize', () => {
+      initOverlay();
+      if (state.mode !== 'home' && !state.animating) {
+        renderTubes();
+      }
+    });
 
     // If URL specified level or seed, go straight to game
     if (state._jumpLevel) {
@@ -370,9 +645,12 @@ const App = (() => {
     Sound.setEnabled(settings.sound);
     Haptic.setEnabled(settings.haptics);
     document.body.classList.toggle('colorblind', settings.colorblind);
+    document.body.classList.toggle('reduce-effects', settings.reduceEffects);
+    Particles.setEnabled(!settings.reduceEffects);
     dom.setSound.checked     = settings.sound;
     dom.setHaptics.checked   = settings.haptics;
     dom.setColorblind.checked = settings.colorblind;
+    dom.setReduce.checked    = settings.reduceEffects;
     // Update remove-ads buttons
     if (Monetization.isAdsRemoved()) {
       dom.btnRemoveAds.textContent = 'Ads Removed ✓';
@@ -429,6 +707,10 @@ const App = (() => {
     });
     dom.setColorblind.addEventListener('change', () => {
       settings.colorblind = dom.setColorblind.checked; applySettings();
+      if (state.mode !== 'home') renderTubes();
+    });
+    dom.setReduce.addEventListener('change', () => {
+      settings.reduceEffects = dom.setReduce.checked; applySettings();
     });
     dom.btnRemoveAds.addEventListener('click', () => purchaseRemoveAds());
     dom.btnRestore.addEventListener('click', async () => {
@@ -480,6 +762,10 @@ const App = (() => {
     state.animating = false;
     state.won = false;
     state.hintMove = null;
+    pourAnim = null;
+    if (animRafId) { cancelAnimationFrame(animRafId); animRafId = null; }
+    Particles.clear();
+    clearOverlay();
     dom.app.classList.add('hidden');
     dom.homeScreen.classList.remove('hidden');
     toggleOverlay(dom.winOverlay, false);
@@ -495,6 +781,7 @@ const App = (() => {
     dom.app.classList.remove('hidden');
     dom.hudLevel.textContent = title;
     Sound.startAmbience();
+    initOverlay();
   }
 
   /* ================================================================
@@ -510,6 +797,8 @@ const App = (() => {
     state.animating = false;
     state.undosLeft = state.FREE_UNDOS;
     state.hintMove = null;
+    waves = {};
+    pourAnim = null;
 
     toggleOverlay(dom.winOverlay, false);
 
@@ -543,6 +832,8 @@ const App = (() => {
     state.animating = false;
     state.undosLeft = state.FREE_UNDOS;
     state.hintMove = null;
+    waves = {};
+    pourAnim = null;
 
     const level = generateDailyLevel();
     state.tubes  = level.tubes;
@@ -583,6 +874,8 @@ const App = (() => {
     state.challengeCode = raw.toUpperCase();
     state.challengeSeed = level.seed;
     state.challengeDiff = level.difficulty;
+    waves = {};
+    pourAnim = null;
 
     state.tubes  = level.tubes;
     state.target = level.target;
@@ -683,6 +976,10 @@ const App = (() => {
 
   function renderTubes() {
     dom.tubeArea.innerHTML = '';
+    tubeEls = [];
+
+    const size = computeTubeSize(state.tubes.length);
+
     state.tubes.forEach((tube, idx) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'tube-wrapper';
@@ -701,22 +998,47 @@ const App = (() => {
       tubeEl.className = 'tube';
       tubeEl.id = 'tube-' + idx;
 
-      tube.forEach((color, ui) => {
-        const unit = document.createElement('div');
-        unit.className = 'liquid-unit';
-        unit.dataset.unitIndex = ui;
-        const info = COLOR_INFO[color];
-        unit.style.background = info.hex;
-        const cb = document.createElement('span');
-        cb.className = 'cb';
-        cb.textContent = info.symbol;
-        unit.appendChild(cb);
-        tubeEl.appendChild(unit);
-      });
+      // Canvas for liquid rendering
+      const cvs = document.createElement('canvas');
+      cvs.className = 'tube-liquid';
+      tubeEl.appendChild(cvs);
 
       wrapper.appendChild(tubeEl);
       dom.tubeArea.appendChild(wrapper);
+
+      tubeEls.push({ wrapper, tube: tubeEl, canvas: cvs });
+
+      // Draw liquid
+      const innerW = size.tubeW - 4;
+      const innerH = size.tubeH - 2;
+      const bands = getVisualBands(tube);
+      const waveState = waves[idx];
+      LiquidRenderer.draw(cvs, bands, {
+        w: innerW, h: innerH,
+        waveAmp: waveState ? waveState.amp : 0,
+        wavePhase: waveState ? waveState.phase : 0,
+        colorblind: settings.colorblind,
+      });
     });
+  }
+
+  /** Redraw liquid in a single tube without rebuilding DOM */
+  function redrawTubeLiquid(idx, bands, extraOpts) {
+    const el = tubeEls[idx];
+    if (!el) return;
+    const tubeW = el.tube.clientWidth || 52;
+    const tubeH = el.tube.clientHeight || 170;
+    const innerW = tubeW - 4;
+    const innerH = tubeH - 2;
+    const waveState = waves[idx];
+    const opts = {
+      w: innerW, h: innerH,
+      waveAmp: waveState ? waveState.amp : 0,
+      wavePhase: waveState ? waveState.phase : 0,
+      colorblind: settings.colorblind,
+    };
+    if (extraOpts) Object.assign(opts, extraOpts);
+    LiquidRenderer.draw(el.canvas, bands || getVisualBands(state.tubes[idx]), opts);
   }
 
   /* ================================================================
@@ -758,141 +1080,557 @@ const App = (() => {
     else animateFuse(si, idx, analysis.result);
   }
 
-  /* ---------- Animations ---------- */
-  function getUnitRect(tubeIdx, unitIdx) {
-    const tubeEl = document.getElementById('tube-' + tubeIdx);
-    if (!tubeEl) return null;
-    const units = tubeEl.querySelectorAll('.liquid-unit');
-    return units[unitIdx] ? units[unitIdx].getBoundingClientRect() : null;
-  }
-
+  /* ================================================================
+     POUR ANIMATION (real liquid pouring with tilt)
+     ================================================================ */
   function animateMove(si, di, units) {
     const srcTube = state.tubes[si];
     const color = srcTube[srcTube.length - 1];
-    const info = COLOR_INFO[color];
-    const srcRects = [];
-    for (let i = 0; i < units; i++) {
-      const r = getUnitRect(si, srcTube.length - 1 - i);
-      if (r) srcRects.push(r);
-    }
 
+    // Execute game logic immediately
     const result = executePour(state.tubes, si, di);
     state.tubes = result.newTubes;
     state.moveCount++;
+    renderHUD();
 
-    const dstFilled = state.tubes[di].length;
-    const tubeEl = document.getElementById('tube-' + di);
-    const tubeRect = tubeEl ? tubeEl.getBoundingClientRect() : null;
-    const unitH = tubeRect ? tubeRect.height / TUBE_CAPACITY : 42;
-
-    const flyers = srcRects.map((sr, i) => {
-      const fly = document.createElement('div');
-      fly.className = 'flying-unit';
-      fly.style.background = info.hex;
-      fly.style.width = sr.width + 'px';
-      fly.style.height = sr.height + 'px';
-      fly.style.left = sr.left + 'px';
-      fly.style.top = sr.top + 'px';
-      if (settings.colorblind) {
-        const cb = document.createElement('span');
-        cb.className = 'cb'; cb.style.display = 'block';
-        cb.textContent = info.symbol; fly.appendChild(cb);
-      }
-      document.body.appendChild(fly);
-      return { el: fly, index: i };
-    });
-
-    // Render source without poured units
-    const tubesWithoutNew = cloneTubes(state.tubes);
-    for (let i = 0; i < units; i++) tubesWithoutNew[di].pop();
-    const saved = state.tubes;
-    state.tubes = tubesWithoutNew;
+    // Deselect and rebuild tubes (but we'll animate over them)
     renderTubes();
-    state.tubes = saved;
 
     Sound.pour(); Haptic.pour();
 
-    requestAnimationFrame(() => {
-      const destEl = document.getElementById('tube-' + di);
-      const destRect = destEl ? destEl.getBoundingClientRect() : null;
-      flyers.forEach(({ el, index }) => {
-        const destUI = dstFilled - units + index;
-        const dy = destRect ? destRect.bottom - (destUI + 1) * unitH : 0;
-        const dx = destRect ? destRect.left + 2 : 0;
-        el.style.transform = 'translate(' +
-          (dx - parseFloat(el.style.left)) + 'px, ' +
-          (dy - parseFloat(el.style.top)) + 'px)';
-      });
-    });
+    if (settings.reduceEffects || isReducedMotion()) {
+      // Simple instant render for reduced effects
+      triggerWave(di, 2);
+      startWaveLoop();
+      setTimeout(() => {
+        state.animating = false;
+        afterMove();
+      }, 100);
+      return;
+    }
 
-    setTimeout(() => {
-      flyers.forEach(f => f.el.remove());
-      renderAll();
+    // Get positions for animation
+    const srcEl = tubeEls[si];
+    const dstEl = tubeEls[di];
+    if (!srcEl || !dstEl) {
       state.animating = false;
       afterMove();
-    }, 380);
+      return;
+    }
+
+    const srcRect = srcEl.wrapper.getBoundingClientRect();
+    const dstRect = dstEl.wrapper.getBoundingClientRect();
+
+    // Store pre-pour state for the source (before the pour was executed)
+    const prePourSrc = state.history[state.history.length - 1][si];
+    const prePourDst = state.history[state.history.length - 1][di];
+    const postPourSrc = state.tubes[si];
+    const postPourDst = state.tubes[di];
+
+    // Animate: source lifts, tilts, pours
+    const totalDuration = 1000; // ms
+    const liftDuration = 250;
+    const pourDuration = 550;
+    const settleDuration = 200;
+    const startTime = performance.now();
+
+    // Determine tilt direction (tilt toward destination)
+    const tiltDir = dstRect.left > srcRect.left ? 1 : -1;
+    const tiltAngle = 70; // degrees
+
+    // Lift the source wrapper
+    srcEl.wrapper.style.transition = 'none';
+    srcEl.wrapper.style.zIndex = '50';
+    srcEl.wrapper.style.position = 'relative';
+
+    pourAnim = {
+      si, di, units, color,
+      prePourSrc, prePourDst,
+      postPourSrc, postPourDst,
+      startTime, totalDuration,
+      liftDuration, pourDuration, settleDuration,
+      tiltDir, tiltAngle,
+      srcEl, dstEl, srcRect, dstRect,
+      done: false,
+    };
+
+    function animFrame(now) {
+      if (pourAnim && pourAnim.done) return;
+
+      const elapsed = now - startTime;
+      const t = Math.min(elapsed / totalDuration, 1);
+
+      if (elapsed <= liftDuration) {
+        // Phase A: Lift and move toward destination
+        const lt = elapsed / liftDuration;
+        const eased = easeOutCubic(lt);
+
+        // Move horizontally toward dest and up
+        const targetX = (dstRect.left - srcRect.left) * 0.5; // move halfway
+        const dx = targetX * eased;
+        const dy = -30 * eased;
+        const rot = tiltDir * tiltAngle * eased;
+
+        srcEl.wrapper.style.transform =
+          'translate(' + dx + 'px, ' + dy + 'px) rotate(' + rot + 'deg)';
+        srcEl.wrapper.style.transformOrigin = 'center bottom';
+
+        // Draw source tube with pre-pour liquid (draining starts in next phase)
+        redrawTubeLiquid(si, getVisualBands(prePourSrc));
+
+      } else if (elapsed <= liftDuration + pourDuration) {
+        // Phase B: Pour — drain source, fill dest, draw stream
+        const pt = (elapsed - liftDuration) / pourDuration;
+        const easedPour = easeInOutQuad(pt);
+
+        // Source drains
+        const drainedUnits = units * easedPour;
+        const srcBands = getPartialDrainBands(prePourSrc, color, units, drainedUnits);
+        redrawTubeLiquid(si, srcBands);
+
+        // Destination fills
+        const filledUnits = units * easedPour;
+        const dstBands = getPartialFillBands(prePourDst, color, units, filledUnits);
+        redrawTubeLiquid(di, dstBands);
+
+        // Draw stream on overlay
+        clearOverlay();
+        if (overlayCtx) {
+          const srcTubeRect = srcEl.tube.getBoundingClientRect();
+          const dstTubeRect = dstEl.tube.getBoundingClientRect();
+
+          // Stream from source lip to dest opening
+          const streamStartX = tiltDir > 0 ?
+            srcTubeRect.right : srcTubeRect.left;
+          const streamStartY = srcTubeRect.top;
+          const streamEndX = dstTubeRect.left + dstTubeRect.width / 2;
+          const streamEndY = dstTubeRect.top + 5;
+
+          // Tapered stream with gravity curve
+          const streamWidth = 4 + (1 - pt) * 2;
+          const ctrlY = Math.min(streamStartY, streamEndY) - 10;
+
+          overlayCtx.strokeStyle = COLOR_INFO[color].hex;
+          overlayCtx.lineWidth = streamWidth;
+          overlayCtx.lineCap = 'round';
+          overlayCtx.globalAlpha = 0.9;
+          overlayCtx.beginPath();
+          overlayCtx.moveTo(streamStartX, streamStartY);
+          overlayCtx.quadraticCurveTo(
+            (streamStartX + streamEndX) / 2, ctrlY,
+            streamEndX, streamEndY
+          );
+          overlayCtx.stroke();
+          overlayCtx.globalAlpha = 1;
+
+          // Splash particles at landing point
+          if (Math.random() < 0.3) {
+            Particles.emit(streamEndX, streamEndY, COLOR_INFO[color].hex, 1, {
+              spread: 20, upSpeed: 30, gravity: 80,
+            });
+          }
+        }
+
+        // Update particles
+        const dt = lastFrameTime ? (now - lastFrameTime) / 1000 : 0.016;
+        if (Particles.active()) {
+          Particles.update(dt);
+          if (overlayCtx) Particles.draw(overlayCtx);
+        }
+        lastFrameTime = now;
+
+      } else {
+        // Phase C: Settle back
+        const st = (elapsed - liftDuration - pourDuration) / settleDuration;
+        const eased = easeOutBounce(Math.min(st, 1));
+
+        const targetX = (dstRect.left - srcRect.left) * 0.5;
+        const dx = targetX * (1 - eased);
+        const dy = -30 * (1 - eased);
+        const rot = tiltDir * tiltAngle * (1 - eased);
+
+        srcEl.wrapper.style.transform =
+          'translate(' + dx + 'px, ' + dy + 'px) rotate(' + rot + 'deg)';
+
+        // Final state
+        redrawTubeLiquid(si, getVisualBands(postPourSrc));
+        redrawTubeLiquid(di, getVisualBands(postPourDst));
+
+        clearOverlay();
+        // Keep particles going
+        const dt = lastFrameTime ? (now - lastFrameTime) / 1000 : 0.016;
+        if (Particles.active()) {
+          Particles.update(dt);
+          if (overlayCtx) Particles.draw(overlayCtx);
+        }
+        lastFrameTime = now;
+      }
+
+      if (t >= 1) {
+        // Animation complete
+        pourAnim = { done: true };
+        srcEl.wrapper.style.transform = '';
+        srcEl.wrapper.style.zIndex = '';
+        srcEl.wrapper.style.position = '';
+        srcEl.wrapper.style.transition = '';
+        clearOverlay();
+
+        // Trigger wave on destination
+        triggerWave(di, 3);
+        startWaveLoop();
+
+        renderTubes();
+        state.animating = false;
+        afterMove();
+        return;
+      }
+
+      animRafId = requestAnimationFrame(animFrame);
+    }
+
+    animRafId = requestAnimationFrame(animFrame);
   }
 
+  /* ================================================================
+     FUSION ANIMATION
+     ================================================================ */
   function animateFuse(si, di, fusionResult) {
     const srcColor = tubeTop(state.tubes[si]);
-    const info = COLOR_INFO[srcColor];
-    const srcRect = getUnitRect(si, state.tubes[si].length - 1);
+    const dstColor = tubeTop(state.tubes[di]);
 
+    // Execute game logic
     const result = executePour(state.tubes, si, di);
     state.tubes = result.newTubes;
     state.moveCount++;
+    renderHUD();
+    renderTubes();
 
-    if (srcRect) {
-      const fly = document.createElement('div');
-      fly.className = 'flying-unit';
-      fly.style.background = info.hex;
-      fly.style.width = srcRect.width + 'px';
-      fly.style.height = srcRect.height + 'px';
-      fly.style.left = srcRect.left + 'px';
-      fly.style.top = srcRect.top + 'px';
-      if (settings.colorblind) {
-        const cb = document.createElement('span');
-        cb.className = 'cb'; cb.style.display = 'block';
-        cb.textContent = info.symbol; fly.appendChild(cb);
-      }
-      document.body.appendChild(fly);
-      Sound.pour(); Haptic.pour();
+    Sound.pour(); Haptic.pour();
 
-      const dstRect = getUnitRect(di, state.tubes[di].length - 1);
-      if (dstRect) {
-        requestAnimationFrame(() => {
-          fly.style.transform = 'translate(' +
-            (dstRect.left - srcRect.left) + 'px, ' +
-            (dstRect.top - srcRect.top) + 'px)';
-          fly.style.opacity = '0.5';
-        });
-      }
-
+    if (settings.reduceEffects || isReducedMotion()) {
+      Sound.bloop(); Haptic.fuse();
+      triggerWave(di, 2);
+      startWaveLoop();
       setTimeout(() => {
-        fly.remove();
-        renderAll();
-        // Glow on fused unit
-        const tubeEl = document.getElementById('tube-' + di);
-        const units = tubeEl ? tubeEl.querySelectorAll('.liquid-unit') : [];
-        const topUnit = units[state.tubes[di].length - 1];
-        if (topUnit) topUnit.classList.add('fusing');
-        Sound.fuse(); Haptic.fuse();
-        setTimeout(() => { state.animating = false; afterMove(); }, 500);
-      }, 350);
-    } else {
-      renderAll();
-      Sound.fuse(); Haptic.fuse();
-      state.animating = false;
-      setTimeout(() => afterMove(), 100);
+        state.animating = false;
+        afterMove();
+      }, 100);
+      return;
     }
+
+    const srcEl = tubeEls[si];
+    const dstEl = tubeEls[di];
+    if (!srcEl || !dstEl) {
+      state.animating = false;
+      afterMove();
+      return;
+    }
+
+    const srcRect = srcEl.wrapper.getBoundingClientRect();
+    const dstRect = dstEl.wrapper.getBoundingClientRect();
+
+    const prePourSrc = state.history[state.history.length - 1][si];
+    const prePourDst = state.history[state.history.length - 1][di];
+    const postPourSrc = state.tubes[si];
+    const postPourDst = state.tubes[di];
+
+    const totalDuration = 1200;
+    const liftDuration = 200;
+    const pourDuration = 400;
+    const fuseDuration = 400;
+    const settleDuration = 200;
+    const startTime = performance.now();
+    const tiltDir = dstRect.left > srcRect.left ? 1 : -1;
+    const tiltAngle = 65;
+
+    srcEl.wrapper.style.transition = 'none';
+    srcEl.wrapper.style.zIndex = '50';
+    srcEl.wrapper.style.position = 'relative';
+
+    pourAnim = { done: false };
+
+    function animFrame(now) {
+      if (pourAnim && pourAnim.done) return;
+
+      const elapsed = now - startTime;
+      const dt = lastFrameTime ? (now - lastFrameTime) / 1000 : 0.016;
+      lastFrameTime = now;
+
+      if (elapsed <= liftDuration) {
+        // Lift phase
+        const lt = easeOutCubic(elapsed / liftDuration);
+        const targetX = (dstRect.left - srcRect.left) * 0.5;
+        srcEl.wrapper.style.transform =
+          'translate(' + (targetX * lt) + 'px, ' + (-25 * lt) + 'px) rotate(' + (tiltDir * tiltAngle * lt) + 'deg)';
+        srcEl.wrapper.style.transformOrigin = 'center bottom';
+        redrawTubeLiquid(si, getVisualBands(prePourSrc));
+
+      } else if (elapsed <= liftDuration + pourDuration) {
+        // Pour 1 unit
+        const pt = easeInOutQuad((elapsed - liftDuration) / pourDuration);
+        const srcBands = getPartialDrainBands(prePourSrc, srcColor, 1, pt);
+        redrawTubeLiquid(si, srcBands);
+
+        // Destination: show the dst color still (hasn't fused yet)
+        redrawTubeLiquid(di, getVisualBands(prePourDst));
+
+        // Stream
+        clearOverlay();
+        if (overlayCtx) {
+          const srcTubeRect = srcEl.tube.getBoundingClientRect();
+          const dstTubeRect = dstEl.tube.getBoundingClientRect();
+          const sx = tiltDir > 0 ? srcTubeRect.right : srcTubeRect.left;
+          const sy = srcTubeRect.top;
+          const ex = dstTubeRect.left + dstTubeRect.width / 2;
+          const ey = dstTubeRect.top + 5;
+          overlayCtx.strokeStyle = COLOR_INFO[srcColor].hex;
+          overlayCtx.lineWidth = 4;
+          overlayCtx.lineCap = 'round';
+          overlayCtx.globalAlpha = 0.9;
+          overlayCtx.beginPath();
+          overlayCtx.moveTo(sx, sy);
+          overlayCtx.quadraticCurveTo((sx + ex) / 2, Math.min(sy, ey) - 10, ex, ey);
+          overlayCtx.stroke();
+          overlayCtx.globalAlpha = 1;
+        }
+
+      } else if (elapsed <= liftDuration + pourDuration + fuseDuration) {
+        // Fusion effect
+        const ft = (elapsed - liftDuration - pourDuration) / fuseDuration;
+
+        // Return source
+        const targetX = (dstRect.left - srcRect.left) * 0.5;
+        const returnT = easeOutCubic(Math.min(ft * 2, 1));
+        srcEl.wrapper.style.transform =
+          'translate(' + (targetX * (1 - returnT)) + 'px, ' + (-25 * (1 - returnT)) + 'px) rotate(' +
+          (tiltDir * tiltAngle * (1 - returnT)) + 'deg)';
+        redrawTubeLiquid(si, getVisualBands(postPourSrc));
+
+        // Swirl effect: blend colors on dest top
+        clearOverlay();
+
+        // Flash the dest tube through colors
+        const dstBandsCopy = getVisualBands(postPourDst);
+        // The top band now has the fusion result — animate the color transition
+        if (ft < 0.5) {
+          // Show blend of src+dst colors (use a gradient effect)
+          const blendT = ft * 2;
+          // Temporarily show original colors mixing
+          if (dstBandsCopy.length > 0) {
+            const topBand = dstBandsCopy[dstBandsCopy.length - 1];
+            // For the first half, draw with the original dst color
+            const mixColor = blendT < 0.5 ? dstColor : fusionResult;
+            dstBandsCopy[dstBandsCopy.length - 1] = { color: mixColor, units: topBand.units };
+          }
+        }
+        redrawTubeLiquid(di, dstBandsCopy);
+
+        // Glow ring on overlay
+        const dstTubeRect = dstEl.tube.getBoundingClientRect();
+        const cx = dstTubeRect.left + dstTubeRect.width / 2;
+        const cy = dstTubeRect.top + dstTubeRect.height * 0.3;
+        if (overlayCtx) {
+          const ringRadius = 10 + ft * 40;
+          const ringAlpha = 1 - ft;
+          overlayCtx.strokeStyle = COLOR_INFO[fusionResult].hex;
+          overlayCtx.lineWidth = 3;
+          overlayCtx.globalAlpha = ringAlpha * 0.7;
+          overlayCtx.beginPath();
+          overlayCtx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+          overlayCtx.stroke();
+          overlayCtx.globalAlpha = 1;
+        }
+
+        // Sparkle particles
+        if (ft < 0.3 && Math.random() < 0.5) {
+          Particles.emit(cx, cy, COLOR_INFO[fusionResult].hex, 2, {
+            spread: 40, upSpeed: 60, gravity: 30,
+          });
+        }
+
+        // Bloop sound at start of fusion
+        if (ft < 0.05) {
+          Sound.bloop(); Haptic.fuse();
+        }
+
+        // Update particles
+        if (Particles.active()) {
+          Particles.update(dt);
+          if (overlayCtx) Particles.draw(overlayCtx);
+        }
+
+      } else {
+        // Settle
+        const st = (elapsed - liftDuration - pourDuration - fuseDuration) / settleDuration;
+        const eased = Math.min(st, 1);
+        srcEl.wrapper.style.transform = '';
+        redrawTubeLiquid(si, getVisualBands(postPourSrc));
+        redrawTubeLiquid(di, getVisualBands(postPourDst));
+
+        clearOverlay();
+        if (Particles.active()) {
+          Particles.update(dt);
+          if (overlayCtx) Particles.draw(overlayCtx);
+        }
+      }
+
+      if (elapsed >= totalDuration) {
+        pourAnim = { done: true };
+        srcEl.wrapper.style.transform = '';
+        srcEl.wrapper.style.zIndex = '';
+        srcEl.wrapper.style.position = '';
+        srcEl.wrapper.style.transition = '';
+        clearOverlay();
+        triggerWave(di, 4);
+        startWaveLoop();
+        renderTubes();
+        state.animating = false;
+        afterMove();
+        return;
+      }
+
+      animRafId = requestAnimationFrame(animFrame);
+    }
+
+    animRafId = requestAnimationFrame(animFrame);
   }
 
+  /* ---------- Animation helpers ---------- */
+
+  /** Get bands for a tube that's partially drained (units being poured out) */
+  function getPartialDrainBands(tube, pourColor, totalDrain, drained) {
+    if (!tube.length) return [];
+    const remaining = tube.slice();
+    // We need to remove `drained` units from the top of the same color
+    let toRemove = drained;
+    for (let i = remaining.length - 1; i >= 0 && toRemove > 0; i--) {
+      if (remaining[i] === pourColor) {
+        const remove = Math.min(1, toRemove);
+        toRemove -= remove;
+        if (remove >= 1) {
+          remaining.splice(i, 1);
+        }
+      } else {
+        break;
+      }
+    }
+
+    // Build bands with potential fractional top
+    const bands = [];
+    if (!remaining.length) return bands;
+
+    let cur = remaining[0], count = 0;
+    for (let i = 0; i < remaining.length; i++) {
+      if (remaining[i] === cur) {
+        count++;
+      } else {
+        bands.push({ color: cur, units: count });
+        cur = remaining[i];
+        count = 1;
+      }
+    }
+    bands.push({ color: cur, units: count });
+
+    // Add fractional remaining pour color on top
+    const fractional = (totalDrain - drained);
+    if (fractional > 0.01 && bands.length > 0) {
+      const topBand = bands[bands.length - 1];
+      if (topBand.color === pourColor) {
+        topBand.units += fractional;
+      } else {
+        bands.push({ color: pourColor, units: fractional });
+      }
+    }
+
+    return bands;
+  }
+
+  /** Get bands for a tube that's being filled */
+  function getPartialFillBands(tube, fillColor, totalFill, filled) {
+    const bands = getVisualBands(tube);
+    if (filled <= 0.01) return bands;
+
+    // Add filled amount on top
+    if (bands.length > 0 && bands[bands.length - 1].color === fillColor) {
+      bands[bands.length - 1].units += filled;
+    } else {
+      bands.push({ color: fillColor, units: filled });
+    }
+    return bands;
+  }
+
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+  function easeInOutQuad(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
+  function easeOutBounce(t) {
+    const n1 = 7.5625, d1 = 2.75;
+    if (t < 1 / d1) return n1 * t * t;
+    if (t < 2 / d1) return n1 * (t -= 1.5 / d1) * t + 0.75;
+    if (t < 2.5 / d1) return n1 * (t -= 2.25 / d1) * t + 0.9375;
+    return n1 * (t -= 2.625 / d1) * t + 0.984375;
+  }
+
+  function isReducedMotion() {
+    return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  /* ---------- Wave system ---------- */
+  function triggerWave(tubeIdx, amplitude) {
+    if (settings.reduceEffects || isReducedMotion()) return;
+    waves[tubeIdx] = {
+      amp: amplitude || 2,
+      phase: 0,
+      vel: 6,
+      lastTime: performance.now(),
+    };
+  }
+
+  function startWaveLoop() {
+    if (animRafId) return; // already running
+    lastFrameTime = performance.now();
+    function waveFrame(now) {
+      const dt = (now - lastFrameTime) / 1000;
+      lastFrameTime = now;
+
+      let anyActive = false;
+
+      // Update waves
+      for (const idx in waves) {
+        const w = waves[idx];
+        w.phase += w.vel * dt;
+        w.amp *= Math.pow(0.05, dt); // exponential decay
+        if (w.amp < 0.3) {
+          delete waves[idx];
+        } else {
+          anyActive = true;
+          redrawTubeLiquid(parseInt(idx));
+        }
+      }
+
+      // Update particles
+      if (Particles.active()) {
+        anyActive = true;
+        Particles.update(dt);
+        clearOverlay();
+        if (overlayCtx) Particles.draw(overlayCtx);
+      }
+
+      if (anyActive) {
+        animRafId = requestAnimationFrame(waveFrame);
+      } else {
+        animRafId = null;
+        clearOverlay();
+      }
+    }
+    animRafId = requestAnimationFrame(waveFrame);
+  }
+
+  /* ---------- Shake ---------- */
   function shakeAnim(si, di) {
-    const wrappers = dom.tubeArea.querySelectorAll('.tube-wrapper');
     [si, di].forEach(idx => {
-      if (wrappers[idx]) {
-        wrappers[idx].classList.add('shake');
-        setTimeout(() => wrappers[idx].classList.remove('shake'), 400);
+      const el = tubeEls[idx];
+      if (el) {
+        el.wrapper.classList.add('shake');
+        setTimeout(() => el.wrapper.classList.remove('shake'), 400);
       }
     });
   }
@@ -1092,6 +1830,7 @@ const App = (() => {
       state.selectedTube = -1;
       state.undosLeft--;
       state.hintMove = null;
+      waves = {};
       renderAll();
       if (state.tutorialActive) showTutorialHint();
       return;
@@ -1141,6 +1880,11 @@ const App = (() => {
   /* ---------- Controls ---------- */
   function restart() {
     if (state.animating) return;
+    waves = {};
+    pourAnim = null;
+    if (animRafId) { cancelAnimationFrame(animRafId); animRafId = null; }
+    Particles.clear();
+    clearOverlay();
     if (state.mode === 'daily')     startDaily();
     else if (state.mode === 'challenge') loadChallengeFromState();
     else startLevel(state.levelNum);
