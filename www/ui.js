@@ -1,29 +1,34 @@
 // ============================================================
-// HUE POUR — UI Layer  v4
-// Canvas liquid (clip-based horizontal liquid in rotated tube)
-// Real pour animation with stream, waves, particles, fusion
-// Tube-complete shine, bespoke sound design, full rework
+// HUE POUR — UI Layer  v6
+// New tube geometry, lip-anchored pour, volume-based liquid
+// Flat glass tubes, straight vertical stream, original doodle bg
 // GAME LOGIC (game.js, monetization.js) UNTOUCHED
 // ============================================================
 'use strict';
 
 /* ===================================================================
-   COLOR HELPERS
+   COLOR OVERRIDES  — spec palette, game.js stays untouched
    =================================================================== */
+const NEW_HEX = {
+  RED:'#E53935', YELLOW:'#FFD93B', BLUE:'#2F7DF6',
+  ORANGE:'#FF8A1F', GREEN:'#2ECC71', PURPLE:'#8E44AD',
+};
+function _hex(c) { return NEW_HEX[c] || COLOR_INFO[c].hex; }
+
 function _hexToRgb(h) {
   return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
 }
 function _hexA(hex, a) {
   const [r,g,b] = _hexToRgb(hex);
-  return 'rgba(' + r + ',' + g + ',' + b + ',' + a.toFixed(3) + ')';
+  return 'rgba('+r+','+g+','+b+','+a.toFixed(3)+')';
 }
 function _lighter(hex, t) {
   const [r,g,b] = _hexToRgb(hex);
-  return 'rgb(' + Math.round(r+(255-r)*t) + ',' + Math.round(g+(255-g)*t) + ',' + Math.round(b+(255-b)*t) + ')';
+  return 'rgb('+Math.round(r+(255-r)*t)+','+Math.round(g+(255-g)*t)+','+Math.round(b+(255-b)*t)+')';
 }
 function _darker(hex, t) {
   const [r,g,b] = _hexToRgb(hex);
-  return 'rgb(' + Math.round(r*(1-t)) + ',' + Math.round(g*(1-t)) + ',' + Math.round(b*(1-t)) + ')';
+  return 'rgb('+Math.round(r*(1-t))+','+Math.round(g*(1-t))+','+Math.round(b*(1-t))+')';
 }
 
 /* ===================================================================
@@ -110,21 +115,19 @@ const Sound = (() => {
     osc(600 + Math.random() * 1500, 0.025 + Math.random() * 0.03, 'sine', 0.03);
   }
 
-  // ---- Pentatonic hop note ----
+  // ---- Celebration sounds ----
   function pentatonic(i) {
     if (!enabled) return;
     const scale = [523.25, 587.33, 659.25, 783.99, 880.00, 1046.50, 1174.66];
     osc(scale[i % scale.length], 0.22, 'triangle', 0.14);
   }
 
-  // ---- Victory arpeggio ----
   function victoryArpeggio() {
     if (!enabled) return;
     [523, 659, 784, 1047, 1319].forEach((f, i) =>
       setTimeout(() => osc(f, 0.28, 'sine', 0.13), i * 75));
   }
 
-  // ---- Whoosh (banner sweep) ----
   function whoosh() {
     if (!enabled) return; ensure();
     const len = actx.sampleRate;
@@ -144,14 +147,12 @@ const Sound = (() => {
     s.start(t); s.stop(t + 0.5);
   }
 
-  // ---- Ding (star pop) ----
   function ding(pitch) {
     if (!enabled) return;
     osc(pitch || 1500, 0.35, 'sine', 0.16);
     osc((pitch || 1500) * 1.498, 0.22, 'sine', 0.07);
   }
 
-  // ---- Button click ----
   function btnClick() { if (!enabled) return; osc(900, 0.025, 'sine', 0.05); }
 
   return {
@@ -160,6 +161,7 @@ const Sound = (() => {
     isEnabled()    { return enabled; },
     getCtx()       { ensure(); return actx; },
 
+    // Glass tap for select/deselect
     select()   { osc(1200, 0.07, 'sine', 0.10); },
     deselect() { osc(900,  0.06, 'sine', 0.07); },
 
@@ -170,7 +172,7 @@ const Sound = (() => {
 
     fuse() {
       if (!enabled) return; ensure();
-      // Warm bloop
+      // Warm bloop with pitch bend
       const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
       o.type = 'sine';
       o.frequency.setValueAtTime(500, t);
@@ -184,12 +186,13 @@ const Sound = (() => {
 
     tubeDone() {
       if (!enabled) return; ensure();
-      // Bright glass ting: two detuned partials
+      // Bright glass ting: two detuned sines
       [2000, 2214].forEach(f => osc(f, 0.65, 'sine', 0.14));
     },
 
     error() {
       if (!enabled) return; ensure();
+      // Short low thud
       const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
       o.type = 'sine';
       o.frequency.setValueAtTime(95, t);
@@ -270,7 +273,7 @@ const Toast = (() => {
 })();
 
 /* ===================================================================
-   SHARE HELPERS  (unchanged from v2)
+   SHARE HELPERS
    =================================================================== */
 async function shareText(text) {
   if (navigator.share) {
@@ -299,7 +302,7 @@ function renderShareCard(info) {
   const c = canvas.getContext('2d');
   const W = 1080, H = 1920;
   canvas.width = W; canvas.height = H;
-  const cols = info.target.map(cl => COLOR_INFO[cl].hex);
+  const cols = info.target.map(cl => _hex(cl));
   const grad = c.createLinearGradient(0, 0, W, H);
   cols.forEach((cl, i) => grad.addColorStop(i / Math.max(1, cols.length - 1), cl));
   c.fillStyle = grad; c.fillRect(0, 0, W, H);
@@ -335,199 +338,24 @@ function renderShareCard(info) {
 }
 
 /* ===================================================================
-   TUBE GEOMETRY
+   EASING
    =================================================================== */
-
-/**
- * Build the outer glass path for the tube.
- * Origin: left,top of the tube bounding box.
- * flare: rim is wider by `flare` px each side.
- */
-function _tubePath(ctx, left, top, w, h, r, flare) {
-  flare = flare || 0;
-  const neck = flare > 0 ? flare * 2 : 0;
-  ctx.moveTo(left - flare, top);
-  ctx.lineTo(left + w + flare, top);
-  if (flare > 0) {
-    ctx.lineTo(left + w, top + neck);
-  }
-  ctx.lineTo(left + w, top + h - r);
-  ctx.arcTo(left + w, top + h, left + w - r, top + h, r);
-  ctx.lineTo(left + r, top + h);
-  ctx.arcTo(left, top + h, left, top + h - r, r);
-  if (flare > 0) {
-    ctx.lineTo(left, top + neck);
-  }
-  ctx.closePath();
+function _easeOut(t)    { return 1 - (1-t)*(1-t); }
+function _easeInOut(t)  { return t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2; }
+function _easeOutBounce(t) {
+  const n1 = 7.5625, d1 = 2.75;
+  if (t < 1/d1)         return n1*t*t;
+  if (t < 2/d1)       { t -= 1.5/d1; return n1*t*t + 0.75; }
+  if (t < 2.5/d1)     { t -= 2.25/d1; return n1*t*t + 0.9375; }
+  t -= 2.625/d1; return n1*t*t + 0.984375;
 }
-
-/** Group consecutive same-colour units into bands (bottom-to-top). */
-function _bands(tube) {
-  if (!tube.length) return [];
-  const out = [];
-  let cur = tube[0], n = 1;
-  for (let i = 1; i < tube.length; i++) {
-    if (tube[i] === cur) n++;
-    else { out.push({ color: cur, units: n }); cur = tube[i]; n = 1; }
-  }
-  out.push({ color: cur, units: n });
-  return out;
-}
+function _easeOutBack(t) { const c = 1.70158; return 1 + (c+1)*Math.pow(t-1,3) + c*Math.pow(t-1,2); }
 
 /* ===================================================================
-   CORE TUBE DRAW — horizontal liquid in rotated tube via clip
-   ===================================================================
-   Parameters:
-     ctx       CanvasRenderingContext2D
-     cx, cy    Bottom-centre of tube in canvas coordinates (rotation pivot)
-     w, h      Tube width/height
-     angle     Rotation in radians (0 = upright)
-     bands     [{color, units}]  — units can be fractional
-     waveState {amp, phase}
-     opts      {selected, hintSrc, hintDst, completed, noShadow}
-   =================================================================== */
-function drawTubeOnCtx(ctx, cx, cy, w, h, angle, bands, waveState, opts) {
-  opts = opts || {};
-  const left = cx - w / 2;
-  const top  = cy - h;
-  const r    = Math.min(w * 0.38, 14);
-  const fl   = Math.min(w * 0.07, 3); // rim flare
-
-  // ── Shadow (world-space, below pivot) ──────────────────────────
-  if (!opts.noShadow) {
-    ctx.save();
-    const sg = ctx.createRadialGradient(cx, cy + 3, 0, cx, cy + 4, w * 0.6);
-    sg.addColorStop(0, 'rgba(0,0,0,0.30)');
-    sg.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = sg;
-    ctx.beginPath(); ctx.ellipse(cx, cy + 5, w * 0.5, 5, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
-  }
-
-  // ══ OUTER SAVE – apply tube rotation ═══════════════════════════
-  ctx.save();
-  ctx.translate(cx, cy); ctx.rotate(angle); ctx.translate(-cx, -cy);
-
-  // Glass background (very faint fill so tube interior is visible)
-  ctx.save();
-  ctx.beginPath(); _tubePath(ctx, left, top, w, h, r, fl);
-  ctx.fillStyle = 'rgba(200,230,255,0.04)'; ctx.fill();
-  ctx.restore();
-
-  // ══ INNER SAVE – clip tube interior, then counter-rotate ═══════
-  ctx.save();
-  // Clip region = tube interior (slightly inset from glass outline)
-  ctx.beginPath();
-  _tubePath(ctx, left + 1.5, top + (fl > 0 ? fl*2 + 1 : 1), w - 3, h - (fl > 0 ? fl*2 : 0) - 1, r * 0.85, 0);
-  ctx.clip();
-
-  // Counter-rotate: now in WORLD space, still clipped to tilted tube interior
-  ctx.translate(cx, cy); ctx.rotate(-angle); ctx.translate(-cx, -cy);
-
-  // ── Draw liquid bands (horizontal rectangles in world space) ────
-  const totalUnits = bands.reduce((s, b) => s + b.units, 0);
-  if (totalUnits > 0) {
-    let curY = cy;
-    for (let i = 0; i < bands.length; i++) {
-      const band = bands[i];
-      const bh   = (band.units / TUBE_CAPACITY) * h;
-      const bt   = curY - bh;
-      const isTop = (i === bands.length - 1);
-      const hex   = COLOR_INFO[band.color].hex;
-
-      // Vertical gradient – lighter at top (surface light), darker at depth
-      const vg = ctx.createLinearGradient(0, bt, 0, curY);
-      vg.addColorStop(0,   _lighter(hex, 0.22));
-      vg.addColorStop(0.3,  hex);
-      vg.addColorStop(1,    _darker(hex, 0.14));
-      ctx.fillStyle = vg;
-      ctx.fillRect(cx - w, bt, w * 2, bh + 1);
-
-      // Horizontal gloss on left side
-      const hg = ctx.createLinearGradient(cx - w/2, 0, cx + w/2, 0);
-      hg.addColorStop(0,    'rgba(255,255,255,0)');
-      hg.addColorStop(0.22, 'rgba(255,255,255,0.14)');
-      hg.addColorStop(0.45, 'rgba(255,255,255,0)');
-      ctx.fillStyle = hg;
-      ctx.fillRect(cx - w, bt, w * 2, bh);
-
-      // Soft separator between bands
-      if (i > 0) {
-        ctx.fillStyle = 'rgba(0,0,0,0.13)';
-        ctx.fillRect(cx - w, curY - 1, w * 2, 2);
-      }
-
-      // Wave surface on topmost band
-      if (isTop && waveState && waveState.amp > 0.3) {
-        const amp   = waveState.amp;
-        const phase = waveState.phase;
-        const wl    = w * 1.6;
-        ctx.fillStyle = _lighter(hex, 0.08);
-        ctx.beginPath();
-        ctx.moveTo(cx - wl, bt + amp);
-        for (let px = cx - wl; px <= cx + wl; px += 1.5) {
-          const wy = bt + amp * Math.sin((px - cx) / (w * 0.44) * Math.PI + phase);
-          ctx.lineTo(px, wy);
-        }
-        ctx.lineTo(cx + wl, bt + amp);
-        ctx.lineTo(cx + wl, bt + amp * 2.5);
-        ctx.lineTo(cx - wl, bt + amp * 2.5);
-        ctx.closePath();
-        ctx.fill();
-      }
-
-      curY = bt;
-    }
-  }
-
-  ctx.restore(); // ═══ END INNER – clip gone, back to rotated space ═══
-
-  // ── Glass outline ───────────────────────────────────────────────
-  const isHint = opts.hintSrc || opts.hintDst;
-  ctx.strokeStyle =
-    opts.selected  ? 'rgba(79,195,247,0.95)'  :
-    opts.hintSrc   ? 'rgba(79,195,247,0.85)'  :
-    opts.hintDst   ? 'rgba(105,240,174,0.85)' :
-    opts.completed ? 'rgba(255,215,0,0.55)'   :
-                     'rgba(255,255,255,0.26)';
-  ctx.lineWidth = opts.selected ? 2.5 : (isHint ? 2.2 : 1.5);
-  ctx.beginPath(); _tubePath(ctx, left, top, w, h, r, fl); ctx.stroke();
-
-  // Bright rim line at top opening
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,0.46)';
-  ctx.lineWidth = 2.5; ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(left - fl + 2, top);
-  ctx.lineTo(left + w + fl - 2, top);
-  ctx.stroke();
-  ctx.restore();
-
-  // Left inner highlight streak
-  ctx.save();
-  const hl = ctx.createLinearGradient(left + 2, 0, left + 12, 0);
-  hl.addColorStop(0,   'rgba(255,255,255,0)');
-  hl.addColorStop(0.5, 'rgba(255,255,255,0.22)');
-  hl.addColorStop(1,   'rgba(255,255,255,0)');
-  ctx.fillStyle = hl;
-  ctx.fillRect(left + 2, top + r + 5, 9, h - r - 16);
-  // Subtle right reflection
-  const hr = ctx.createLinearGradient(left + w - 11, 0, left + w - 2, 0);
-  hr.addColorStop(0,   'rgba(255,255,255,0)');
-  hr.addColorStop(0.5, 'rgba(255,255,255,0.07)');
-  hr.addColorStop(1,   'rgba(255,255,255,0)');
-  ctx.fillStyle = hr;
-  ctx.fillRect(left + w - 10, top + r + 5, 8, h - r - 16);
-  ctx.restore();
-
-  ctx.restore(); // ═══ END OUTER – back to world space ═══════════
-}
-
-/* ===================================================================
-   PARTICLE SYSTEM  (max 120, pooled)
+   PARTICLE SYSTEM  (max 80, pooled)
    =================================================================== */
 const Particles = (() => {
-  const MAX = 120;
+  const MAX = 80;
   const pool = [];
   let enabled = true;
 
@@ -579,11 +407,8 @@ const Particles = (() => {
         ctx.strokeStyle = p.color; ctx.lineWidth = 1;
         ctx.globalAlpha = alpha * 0.45;
         ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.stroke();
-        ctx.fillStyle = 'rgba(255,255,255,0.18)';
-        ctx.beginPath(); ctx.arc(p.x - r*0.3, p.y - r*0.3, r*0.4, 0, Math.PI * 2); ctx.fill();
 
       } else if (p.type === 'shine') {
-        // Horizontal shine sweep: p.x moves, p.h = tube height
         const sg = ctx.createLinearGradient(p.x - p.hw, p.cy, p.x + p.hw, p.cy);
         sg.addColorStop(0,   'rgba(255,255,255,0)');
         sg.addColorStop(0.5, 'rgba(255,255,255,0.38)');
@@ -694,24 +519,163 @@ const Confetti = (() => {
 })();
 
 /* ===================================================================
-   EASING
+   TUBE GEOMETRY — square top, semicircular bottom, thin outline
    =================================================================== */
-function _easeOut(t)    { return 1 - (1-t)*(1-t); }
-function _easeInOut(t)  { return t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2; }
-function _easeOutBounce(t) {
-  const n1 = 7.5625, d1 = 2.75;
-  if (t < 1/d1)         return n1*t*t;
-  if (t < 2/d1)       { t -= 1.5/d1; return n1*t*t + 0.75; }
-  if (t < 2.5/d1)     { t -= 2.25/d1; return n1*t*t + 0.9375; }
-  t -= 2.625/d1; return n1*t*t + 0.984375;
+
+/**
+ * Build tube path.  Origin: (left, top) of bounding box.
+ * Square top corners, semicircular bottom (radius = w/2).
+ */
+function _tubePath(ctx, left, top, w, h) {
+  const r = w / 2;
+  ctx.moveTo(left, top);
+  ctx.lineTo(left + w, top);
+  ctx.lineTo(left + w, top + h - r);
+  ctx.arcTo(left + w, top + h, left + w / 2, top + h, r);
+  ctx.arcTo(left, top + h, left, top + h - r, r);
+  ctx.lineTo(left, top);
+  ctx.closePath();
+}
+
+/** Group consecutive same-colour units into bands (bottom-to-top). */
+function _bands(tube) {
+  if (!tube.length) return [];
+  const out = [];
+  let cur = tube[0], n = 1;
+  for (let i = 1; i < tube.length; i++) {
+    if (tube[i] === cur) n++;
+    else { out.push({ color: cur, units: n }); cur = tube[i]; n = 1; }
+  }
+  out.push({ color: cur, units: n });
+  return out;
+}
+
+/* ===================================================================
+   CORE TUBE DRAW — flat colors, clip-based horizontal liquid
+   ===================================================================
+   Parameters:
+     ctx       CanvasRenderingContext2D
+     cx, cy    Bottom-centre of tube in canvas coordinates (rotation pivot)
+     w, h      Tube outer width/height
+     angle     Rotation in radians (0 = upright)
+     bands     [{color, units}]  — units can be fractional
+     waveState {amp, phase}
+     opts      {selected, hintSrc, hintDst, completed, noGlass, colorblind}
+   =================================================================== */
+function drawTubeOnCtx(ctx, cx, cy, w, h, angle, bands, waveState, opts) {
+  opts = opts || {};
+  const left = cx - w / 2;
+  const top  = cy - h;
+  const strokeW = w * 0.055;
+  // Inner dimensions (inset by stroke)
+  const iLeft = left + strokeW / 2;
+  const iTop  = top + strokeW / 2;
+  const iW    = w - strokeW;
+  const iH    = h - strokeW / 2;
+  const unitH = iH * 0.22;   // each unit = 22% of inner height
+  const r = w / 2;
+
+  // ══ OUTER SAVE – apply tube rotation ═══════════════════════════
+  ctx.save();
+  ctx.translate(cx, cy); ctx.rotate(angle); ctx.translate(-cx, -cy);
+
+  // ══ INNER SAVE – clip tube interior, then counter-rotate for liquid ═══
+  const totalUnits = bands.reduce((s, b) => s + b.units, 0);
+  if (totalUnits > 0) {
+    ctx.save();
+    // Clip to tube interior
+    ctx.beginPath();
+    _tubePath(ctx, iLeft, iTop, iW, iH);
+    ctx.clip();
+
+    // Counter-rotate: now in WORLD space, still clipped to tilted tube
+    ctx.translate(cx, cy); ctx.rotate(-angle); ctx.translate(-cx, -cy);
+
+    // Draw liquid bands (horizontal rectangles in world space)
+    let curY = cy;
+    for (let i = 0; i < bands.length; i++) {
+      const band = bands[i];
+      const bh   = band.units * unitH;
+      const bt   = curY - bh;
+      const hex  = _hex(band.color);
+      const isTop = (i === bands.length - 1);
+
+      // Flat solid color
+      ctx.fillStyle = hex;
+      ctx.fillRect(cx - w * 1.5, bt, w * 3, bh + 0.5);
+
+      // Sharp boundary line between bands
+      if (i > 0) {
+        ctx.fillStyle = 'rgba(0,0,0,0.12)';
+        ctx.fillRect(cx - w * 1.5, curY - 0.5, w * 3, 1);
+      }
+
+      // Surface wave on topmost band
+      if (isTop && waveState && waveState.amp > 0.3 && !_reducedMotion()) {
+        const amp = waveState.amp;
+        const phase = waveState.phase;
+        ctx.fillStyle = _lighter(hex, 0.08);
+        ctx.beginPath();
+        ctx.moveTo(cx - w * 1.5, bt + amp);
+        for (let px = cx - w * 1.5; px <= cx + w * 1.5; px += 2) {
+          const wy = bt + amp * Math.sin((px - cx) / (w * 0.44) * Math.PI + phase);
+          ctx.lineTo(px, wy);
+        }
+        ctx.lineTo(cx + w * 1.5, bt + amp * 2.5);
+        ctx.lineTo(cx - w * 1.5, bt + amp * 2.5);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Colorblind symbol on each unit
+      if (opts.colorblind) {
+        const sym = COLOR_INFO[band.color].symbol;
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.font = 'bold ' + Math.max(9, w * 0.18) + 'px sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        for (let u = 0; u < Math.ceil(band.units); u++) {
+          const symY = curY - (u + 0.5) * unitH;
+          ctx.fillText(sym, cx, symY);
+        }
+      }
+
+      curY = bt;
+    }
+
+    ctx.restore(); // end clip
+  }
+
+  // ── Glass outline (thin #CFCFCF, square top, semicircular bottom) ──
+  if (!opts.noGlass) {
+    const glassColor =
+      opts.selected  ? 'rgba(79,195,247,0.95)'  :
+      opts.hintSrc   ? 'rgba(79,195,247,0.85)'  :
+      opts.hintDst   ? 'rgba(105,240,174,0.85)' :
+      opts.completed ? 'rgba(255,215,0,0.55)'   :
+                       '#CFCFCF';
+    ctx.strokeStyle = glassColor;
+    ctx.lineWidth = opts.selected ? strokeW * 1.5 : strokeW;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    // Draw open-mouth tube: sides + bottom, NO top line
+    ctx.beginPath();
+    ctx.moveTo(left, top);
+    ctx.lineTo(left, top + h - r);
+    ctx.arcTo(left, top + h, left + r, top + h, r);
+    ctx.arcTo(left + w, top + h, left + w, top + h - r, r);
+    ctx.lineTo(left + w, top);
+    ctx.stroke();
+  }
+
+  ctx.restore(); // end rotation
 }
 
 /* ===================================================================
    ANIMATION STATE
    =================================================================== */
 let _tubeEls  = [];        // [{wrapper, canvas, ctx}]
-let _tubeW    = 60;
-let _tubeH    = 180;
+let _tubeW    = 55;
+let _tubeH    = 204;
 let _overlayEl  = null;
 let _overlayCtx = null;
 let _waves    = {};        // tubeIdx -> {amp, phase, freq, lastT}
@@ -719,102 +683,101 @@ let _rafId    = null;
 let _lastRafT = 0;
 let _anim     = null;      // current pour animation
 let _reduceEff = false;
-let _celeb     = null;      // celebration sequence state
+let _celeb     = null;
 let _comboCount = 0;
 let _lastFuse   = false;
 let _bgCanvas   = null;
 let _bgCtx      = null;
 let _bgShapes   = [];
+let _slowmo     = 1.0;     // ?slowmo=0.25 for debug
 
 function _reducedMotion() {
   return _reduceEff || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 }
 
-/** Compute world-space position of the tube's pour-side lip when tilted. */
-function _lipPos(cx, cy, w, h, angle) {
-  // Pour side = the side that becomes lower when tube tilts
-  // For +angle (clockwise), pour out right side: local offset (+w/2, -h)
-  // For -angle (counter-clockwise), pour out left: local offset (-w/2, -h)
-  const side = angle >= 0 ? 1 : -1;
-  const lx = side * w / 2, ly = -h;
+/* ===================================================================
+   LIP POSITION — world-space position of pour-side mouth corner
+   For lip-anchored rotation: the lip stays fixed, body rotates around it
+   =================================================================== */
+function _lipPos(cx, cy, w, h, angle, tiltDir) {
+  // Lip is at the top corner on the destination side
+  // Local offset from bottom-centre: (tiltDir * w/2, -h)
+  const lx = tiltDir * w / 2;
+  const ly = -h;
   const ca = Math.cos(angle), sa = Math.sin(angle);
   return { x: cx + lx*ca - ly*sa, y: cy + lx*sa + ly*ca };
 }
 
-/** Draw the liquid stream from lip to destination surface. */
-function _drawStream(ctx, lip, destX, destY, color, shimT) {
-  const hex = COLOR_INFO[color].hex;
-  const ctrlX = lip.x + (destX - lip.x) * 0.4;
-  const ctrlY = Math.max(lip.y, destY) + 8 + Math.abs(destX - lip.x) * 0.08;
-  const sw = 5;
+/** Compute pour angle where liquid surface just reaches the lip.
+ *  h = current liquid height, L = inner straight length, w = inner width */
+function _computePourAngle(h, L, w) {
+  if (h <= 0.001) return Math.PI * 100 / 180;
+  let tanTheta;
+  if (h >= L / 2) tanTheta = 2 * (L - h) / w;
+  else tanTheta = (L * L) / (2 * w * h);
+  if (tanTheta <= 0) return Math.PI * 100 / 180;
+  return Math.min(Math.atan(tanTheta), Math.PI * 100 / 180);
+}
 
-  // Outer translucent stream
-  ctx.strokeStyle = _hexA(hex, 0.52);
-  ctx.lineWidth = sw + 2; ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(lip.x, lip.y);
-  ctx.quadraticCurveTo(ctrlX, ctrlY, destX, destY); ctx.stroke();
+/** Draw the liquid stream — straight vertical line from lip to dest surface. */
+function _drawStream(ctx, lipX, lipY, destX, destY, color, streamWidth, streamAlpha) {
+  const hex = _hex(color);
+  const sw = streamWidth;
 
-  // Inner bright core
-  ctx.strokeStyle = _lighter(hex, 0.32);
-  ctx.lineWidth = sw * 0.35;
-  ctx.beginPath(); ctx.moveTo(lip.x, lip.y);
-  ctx.quadraticCurveTo(ctrlX, ctrlY, destX, destY); ctx.stroke();
-
-  // Moving shimmer dot on the bezier
-  const qs = (Math.sin(shimT * 9) * 0.5 + 0.5); // 0–1 oscillating
-  const qx = (1-qs)*(1-qs)*lip.x + 2*(1-qs)*qs*ctrlX + qs*qs*destX;
-  const qy = (1-qs)*(1-qs)*lip.y + 2*(1-qs)*qs*ctrlY + qs*qs*destY;
+  // Straight vertical line from lip down
   ctx.save();
-  ctx.globalAlpha = 0.35 * (Math.sin(shimT * 13) * 0.5 + 0.5);
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.beginPath(); ctx.arc(qx, qy, 2.2, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = _hexA(hex, 0.85 * streamAlpha);
+  ctx.lineWidth = sw;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(lipX, lipY);
+  ctx.lineTo(lipX, destY);
+  ctx.stroke();
   ctx.restore();
 
-  // Splash drops at landing
-  if (!_reducedMotion() && Math.random() < 0.22) {
-    for (let i = 0; i < 2; i++) {
-      Particles.spawn(destX + (Math.random()-0.5)*7, destY, 'drop', {
-        vx: (Math.random()-0.5)*48, vy: -8 - Math.random()*24,
-        color: hex, radius: 1.5+Math.random(), decay: 2.0, gravity: 100, drag: 0.95,
+  // Impact droplets
+  if (!_reducedMotion() && Math.random() < 0.18) {
+    for (let i = 0; i < 3; i++) {
+      Particles.spawn(lipX + (Math.random()-0.5)*6, destY, 'drop', {
+        vx: (Math.random()-0.5)*40, vy: -6 - Math.random()*18,
+        color: hex, radius: 1+Math.random(), decay: 2.0, gravity: 100, drag: 0.95,
       });
     }
   }
 }
 
-/** Trigger fusion visual effect at world position cx, cy. */
+/** Trigger fusion visual effect. */
 function _fusionEffect(fusionColor, cx, cy) {
   if (_reducedMotion()) return;
-  const hex = COLOR_INFO[fusionColor].hex;
-  Particles.spawn(cx, cy, 'ring', { r0: 5, r1: 55, color: hex, decay: 1.4 });
-  const count = 8 + Math.floor(Math.random() * 5);
+  const hex = _hex(fusionColor);
+  Particles.spawn(cx, cy, 'ring', { r0: 5, r1: 50, color: hex, decay: 1.4 });
+  const count = 6 + Math.floor(Math.random() * 3);
   for (let i = 0; i < count; i++) {
     const a = (i / count) * Math.PI * 2;
-    const spd = 28 + Math.random() * 42;
+    const spd = 25 + Math.random() * 35;
     Particles.spawn(cx, cy, 'sparkle', {
-      vx: Math.cos(a)*spd, vy: Math.sin(a)*spd - 22,
-      color: hex, radius: 2+Math.random()*2.2,
-      decay: 0.9+Math.random()*0.5, gravity: 32, drag: 0.95,
+      vx: Math.cos(a)*spd, vy: Math.sin(a)*spd - 20,
+      color: hex, radius: 2+Math.random()*2,
+      decay: 0.9+Math.random()*0.4, gravity: 30, drag: 0.95,
     });
   }
 }
 
-/** Trigger tube-complete shine + sparkles. */
+/** Tube-complete shine + sparkles. */
 function _completeEffect(wrapperRect) {
   if (_reducedMotion()) return;
   const cx = wrapperRect.left + wrapperRect.width / 2;
   const top = wrapperRect.top + (wrapperRect.height - _tubeH) / 2;
-  // Shine sweep particle: x moves across tube width + a bit
   Particles.spawn(cx - _tubeW * 0.7, 0, 'shine', {
     vx: _tubeW * 2.5, vy: 0,
     top: top, height: _tubeH, cy: top + _tubeH/2, hw: _tubeW * 0.4,
     decay: 1.1,
   });
-  // Gold sparkles at top
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 6; i++) {
     Particles.spawn(cx + (Math.random()-0.5)*_tubeW, top, 'sparkle', {
-      vx: (Math.random()-0.5)*35, vy: -22-Math.random()*32,
-      color: '#FFD700', radius: 2.2+Math.random()*1.5,
-      decay: 0.9+Math.random()*0.4, gravity: 55, drag: 0.95,
+      vx: (Math.random()-0.5)*30, vy: -20-Math.random()*28,
+      color: '#FFD700', radius: 2+Math.random()*1.5,
+      decay: 0.9+Math.random()*0.4, gravity: 50, drag: 0.95,
     });
   }
 }
@@ -880,7 +843,8 @@ function _startRaf() {
 }
 
 function _tick(now) {
-  const dt = Math.min((now - _lastRafT) / 1000, 0.05);
+  const rawDt = Math.min((now - _lastRafT) / 1000, 0.05);
+  const dt = rawDt * _slowmo;
   _lastRafT = now;
   let cont = false;
 
@@ -895,109 +859,154 @@ function _tick(now) {
   // ── Pour animation ────────────────────────────────────────────
   if (_anim) {
     cont = true;
-    const a      = _anim;
-    const elapsed = now - a.startTime;
-    const { P0, P1, P2, P3, P4 } = a;
-    const total  = P0 + P1 + P2 + P3 + P4;
-    const shimT  = now * 0.001;
+    const a = _anim;
+    const rawElapsed = now - a.startTime;
+    const elapsed = rawElapsed * _slowmo;
 
-    let angle = 0, offX = 0, offY = 0;
+    const { P1_DUR, P2_DUR, P3_DUR } = a;
+    const totalDur = P1_DUR + P2_DUR + P3_DUR;
+
+    // Source tube dimensions
+    const w = _tubeW;
+    const h = _tubeH;
+    const strokeW = w * 0.055;
+    const innerW = w - strokeW;
+    const innerH = h - strokeW / 2;
+    const unitH = innerH * 0.22;
+    const L = innerH - w / 2; // straight inner length (total - semicircle radius)
+
+    let angle = 0;
     let streamOn = false;
+    let streamAlpha = 1;
     let curSrc = a.preSrcBands;
     let curDst = a.preDstBands;
+    let pourT = 0;
 
-    if (elapsed < P0) {
-      // Lift + approach
-      const t = _easeOut(elapsed / P0);
-      offY = -18 * t;
-      offX = (a.dstCx - a.srcCx) * 0.28 * t;
+    // Current liquid height in source
+    const srcUnitsStart = a.preSrcBands.reduce((s,b) => s + b.units, 0);
+    const srcUnitsEnd = a.postSrcBands.reduce((s,b) => s + b.units, 0);
+    const hStart = srcUnitsStart * unitH;
+    const hEnd = srcUnitsEnd * unitH;
 
-    } else if (elapsed < P0 + P1) {
-      // Tilt
-      const t = _easeInOut((elapsed - P0) / P1);
-      angle = a.pourAngle * t;
-      offY = -18; offX = (a.dstCx - a.srcCx) * 0.28;
-      streamOn = Math.abs(angle) >= Math.abs(a.streamStart);
+    // Target angle at start of pour (angle where liquid reaches lip at h_start)
+    const angleStart = _computePourAngle(hStart, L, innerW);
 
-    } else if (elapsed < P0 + P1 + P2) {
-      // Pour: drain source, fill dest, draw stream
-      const t = _easeInOut((elapsed - P0 - P1) / P2);
-      angle = a.pourAngle; offY = -18; offX = (a.dstCx - a.srcCx) * 0.28;
+    if (elapsed < P1_DUR) {
+      // PHASE 1: travel + tilt to angleStart
+      const t = _easeInOut(elapsed / P1_DUR);
+      angle = a.tiltDir * angleStart * t;
+
+    } else if (elapsed < P1_DUR + P2_DUR) {
+      // PHASE 2: pour — angle computed from liquid level
+      pourT = _easeInOut((elapsed - P1_DUR) / P2_DUR);
+      const curH = hStart + (hEnd - hStart) * pourT;
+      const curAngle = _computePourAngle(curH, L, innerW);
+      angle = a.tiltDir * curAngle;
       streamOn = true;
 
-      curSrc = _drainBands(a.preSrcBands, a.srcColor, a.units, t);
+      curSrc = _drainBands(a.preSrcBands, a.srcColor, a.units, pourT);
       if (a.type === 'fuse') {
-        // For fuse: dest stays same level; at midpoint swap color
-        curDst = t < 0.5 ? a.preDstBands : a.postDstBands;
+        curDst = pourT < 0.5 ? a.preDstBands : a.postDstBands;
       } else {
-        curDst = _fillBands(a.preDstBands, a.srcColor, a.units, t);
+        curDst = _fillBands(a.preDstBands, a.srcColor, a.units, pourT);
       }
 
       // Redraw dest canvas
       _redrawBands(a.di, curDst);
-      Sound.updatePourFill(curDst.reduce((s,b)=>s+b.units,0) / TUBE_CAPACITY);
+      Sound.updatePourFill(curDst.reduce((s,b) => s + b.units, 0) / TUBE_CAPACITY);
 
-      // Bubble particles in dest
-      if (!_reducedMotion() && Math.random() < 0.07 && _tubeEls[a.di]) {
-        const dr = _tubeEls[a.di].wrapper.getBoundingClientRect();
-        Particles.spawn(
-          dr.left + dr.width/2 + (Math.random()-0.5)*_tubeW*0.4,
-          dr.bottom - Math.random()*_tubeH*0.55,
-          'bubble', {
-            vx: (Math.random()-0.5)*5, vy: -18-Math.random()*28,
-            color: 'rgba(255,255,255,0.4)',
-            radius: 1+Math.random()*2, decay: 0.8+Math.random()*0.5, gravity: 0, drag: 0.99,
-          }
-        );
-      }
-
-      // Bubble audio plips
+      // Bubble plips
       if (Math.random() < 0.04) Sound.bubble();
 
       // Fusion trigger at midpoint
-      if (a.type === 'fuse' && t >= 0.5 && !a.fuseDone) {
+      if (a.type === 'fuse' && pourT >= 0.5 && !a.fuseDone) {
         a.fuseDone = true;
         const dr = _tubeEls[a.di] && _tubeEls[a.di].wrapper.getBoundingClientRect();
         if (dr) _fusionEffect(a.fusionResult, dr.left+dr.width/2, dr.top+dr.height*0.3);
         Sound.fuse(); Haptic.fuse();
       }
 
-    } else if (elapsed < P0 + P1 + P2 + P3) {
-      // Untilt
-      const t = _easeOut((elapsed - P0 - P1 - P2) / P3);
-      angle = a.pourAngle * (1 - t);
-      offY = -18 * (1 - t * 0.5); offX = (a.dstCx - a.srcCx) * 0.28 * (1 - t);
-      curSrc = a.postSrcBands; curDst = a.postDstBands;
+    } else if (elapsed < totalDur) {
+      // PHASE 3: return — tilt back to 0, return to slot
+      const t = _easeInOut((elapsed - P1_DUR - P2_DUR) / P3_DUR);
+      // Spring overshoot (6%)
+      const springT = t < 0.7 ? t / 0.7 : 1.0 + 0.06 * Math.sin((t - 0.7) / 0.3 * Math.PI);
+      const endAngle = _computePourAngle(hEnd, L, innerW);
+      angle = a.tiltDir * endAngle * (1 - springT);
+      curSrc = a.postSrcBands;
+      curDst = a.postDstBands;
       _redrawBands(a.di, curDst);
 
-    } else if (elapsed < total) {
-      // Return + bounce settle
-      const t = _easeOutBounce((elapsed - P0 - P1 - P2 - P3) / P4);
-      offY = -18 * (1-t) * 0.25; offX = 0;
-      angle = 0;
-      curSrc = a.postSrcBands; curDst = a.postDstBands;
+      // Stream detach: top falls down
+      if (t < 0.15) {
+        streamOn = true;
+        streamAlpha = 1 - t / 0.15;
+      }
 
     } else {
       _finishAnim();
       cont = false;
-      // Fall through to continue particle/wave updates below
     }
 
-    // Draw animated source tube on overlay
+    // Draw animated source tube on overlay using lip-anchored transform
     if (_anim && _overlayCtx) {
-      const animCx = a.srcCx + offX;
-      const animCy = a.srcCy + offY;
-      drawTubeOnCtx(_overlayCtx, animCx, animCy, _tubeW, _tubeH, angle, curSrc, _waves[a.si], {});
+      // Compute lip world position: lip stays at target position
+      const lipWorldX = a.lipTargetX;
+      const lipWorldY = a.lipTargetY;
 
+      // The lip in tube-local coords (relative to bottom-centre):
+      // lip = (tiltDir * w/2, -h)
+      const lipLocalX = a.tiltDir * w / 2;
+      const lipLocalY = -h;
+
+      // Phase 1 interpolation: move lip from original to target
+      let lipX, lipY;
+      if (elapsed < P1_DUR) {
+        const t = _easeInOut(elapsed / P1_DUR);
+        lipX = a.srcLipOrigX + (lipWorldX - a.srcLipOrigX) * t;
+        lipY = a.srcLipOrigY + (lipWorldY - a.srcLipOrigY) * t - 0.35 * w * Math.sin(t * Math.PI);
+      } else if (elapsed < P1_DUR + P2_DUR) {
+        lipX = lipWorldX;
+        lipY = lipWorldY;
+      } else {
+        // Phase 3: return to original position
+        const t = _easeInOut((elapsed - P1_DUR - P2_DUR) / P3_DUR);
+        const springT = t < 0.7 ? t / 0.7 : 1.0 + 0.06 * Math.sin((t - 0.7) / 0.3 * Math.PI);
+        lipX = lipWorldX + (a.srcLipOrigX - lipWorldX) * springT;
+        lipY = lipWorldY + (a.srcLipOrigY - lipWorldY) * springT;
+      }
+
+      // Draw tube: translate so lip is at lipX,lipY, rotate around lip
+      _overlayCtx.save();
+      _overlayCtx.translate(lipX, lipY);
+      _overlayCtx.rotate(angle);
+      // Now draw tube with bottom-centre at (-lipLocalX, -lipLocalY) = (-lipLocalX, h)
+      const drawCx = -lipLocalX;
+      const drawCy = h; // bottom-centre in rotated space
+      drawTubeOnCtx(_overlayCtx, drawCx, drawCy, w, h, 0, curSrc, _waves[a.si], {
+        colorblind: document.body.classList.contains('colorblind'),
+      });
+      _overlayCtx.restore();
+
+      // Draw stream
       if (streamOn) {
-        const lip = _lipPos(animCx, animCy, _tubeW, _tubeH, angle);
+        // Stream from lip straight down to dest surface
         const dstEl = _tubeEls[a.di];
         if (dstEl) {
           const dr = dstEl.wrapper.getBoundingClientRect();
-          const dstCx = dr.left + dr.width / 2;
-          const dstUnits = curDst.reduce((s,b)=>s+b.units, 0);
-          const dstSurfY = dr.bottom - (dstUnits / TUBE_CAPACITY) * _tubeH - 2;
-          _drawStream(_overlayCtx, lip, dstCx, dstSurfY, a.srcColor, shimT);
+          const dstUnits = curDst.reduce((s,b) => s + b.units, 0);
+          // Surface Y: bottom of tube canvas minus padding, then subtract liquid height
+          const dstInnerH = _tubeH - _tubeW * 0.055 / 2;
+          const dstLiqH = dstUnits * dstInnerH * 0.22;
+          const dstBottomY = dr.bottom - 7; // bottom of tube in screen coords
+          const dstSurfY = dstBottomY - dstLiqH;
+          const streamW = w * 0.07;
+          // Width eases in
+          const streamElapsed = elapsed - P1_DUR;
+          const widthFrac = Math.min(1, streamElapsed / 100);
+          _drawStream(_overlayCtx, lipX, lipY, lipX,
+            Math.max(lipY + 5, dstSurfY),
+            a.srcColor, streamW * widthFrac, streamAlpha);
         }
       }
     }
@@ -1006,7 +1015,7 @@ function _tick(now) {
   // ── Waves ─────────────────────────────────────────────────────
   for (const ti in _waves) {
     const w = _waves[ti];
-    const dtt = (now - w.lastT) / 1000;
+    const dtt = rawDt;
     w.lastT = now;
     w.phase += w.freq * dtt;
     w.amp   *= Math.pow(0.03, dtt);
@@ -1045,7 +1054,6 @@ function _tick(now) {
     _rafId = requestAnimationFrame(_tick);
   } else {
     _rafId = null;
-    // Clear overlay if nothing active
     if (_overlayCtx && _overlayEl) {
       _overlayCtx.setTransform(1,0,0,1,0,0);
       _overlayCtx.clearRect(0, 0, _overlayEl.width, _overlayEl.height);
@@ -1064,6 +1072,9 @@ function _finishAnim() {
 
   // Final redraw
   _renderTubesAll();
+
+  // Wave on dest
+  _wave(a.di, 3);
 
   // Tube-complete effect for newly completed tubes
   if (a.prevTubes && _st.tubes) {
@@ -1099,19 +1110,29 @@ function _initOverlay() {
 function _computeTubeSize(n) {
   const area = document.getElementById('tube-area');
   if (!area) return;
-  const aW = area.clientWidth  - 20;
+  const colW = Math.min(480, area.clientWidth);
   const aH = area.clientHeight - 16;
-  const GAP = 10;
+
+  _tubeW = Math.max(40, Math.round(colW * 0.115));
+  _tubeH = Math.round(_tubeW * 3.7);
+  const GAP = Math.round(_tubeW * 0.6);
+
   const cols = n <= 5 ? n : Math.ceil(n / 2);
   const rows = n <= 5 ? 1 : 2;
-  _tubeW = Math.max(44, Math.min(90, Math.floor((aW - (cols-1)*GAP) / cols)));
-  _tubeH = Math.max(120, Math.min(220,
-    Math.floor((_tubeW * 2.75)),
-    Math.floor((aH - (rows-1)*18) / rows)
-  ));
+  const rowGap = Math.round(_tubeH * 0.8);
+
+  // Ensure it fits vertically
+  const needH = rows * _tubeH + (rows - 1) * rowGap;
+  if (needH > aH && aH > 0) {
+    const scale = aH / needH;
+    _tubeH = Math.floor(_tubeH * scale);
+    _tubeW = Math.round(_tubeH / 3.7);
+  }
+
   document.documentElement.style.setProperty('--tube-w', _tubeW + 'px');
   document.documentElement.style.setProperty('--tube-h', _tubeH + 'px');
   document.documentElement.style.setProperty('--tube-gap', GAP + 'px');
+  document.documentElement.style.setProperty('--row-gap', (rows > 1 ? rowGap : GAP) + 'px');
 }
 
 function _setupTubeCanvas(canvas) {
@@ -1125,13 +1146,11 @@ function _setupTubeCanvas(canvas) {
   return ctx;
 }
 
-/** Redraw tube i using its current game state bands. */
 function _redrawTube(ti) {
   if (!_tubeEls[ti] || !_st.tubes) return;
   _redrawBands(ti, _bands(_st.tubes[ti]));
 }
 
-/** Redraw tube i using provided bands. */
 function _redrawBands(ti, bands) {
   const el = _tubeEls[ti];
   if (!el) return;
@@ -1139,13 +1158,14 @@ function _redrawBands(ti, bands) {
   const cW = _tubeW + 10, cH = _tubeH + 14;
   ctx.setTransform(Math.min(devicePixelRatio||1,2),0,0,Math.min(devicePixelRatio||1,2),0,0);
   ctx.clearRect(0, 0, cW, cH);
-  const cx = cW / 2, cy = _tubeH + 7; // bottom-centre in canvas coords
+  const cx = cW / 2, cy = _tubeH + 7;
   const tube = _st.tubes && _st.tubes[ti];
   drawTubeOnCtx(ctx, cx, cy, _tubeW, _tubeH, 0, bands, _waves[ti], {
     selected:  ti === _st.selectedTube,
     hintSrc:   _st.hintMove && ti === _st.hintMove.src,
     hintDst:   _st.hintMove && ti === _st.hintMove.dst,
     completed: tube && isTubeComplete(tube),
+    colorblind: document.body.classList.contains('colorblind'),
   });
 }
 
@@ -1176,31 +1196,27 @@ function _renderTubesAll() {
     _buildTubeDOM();
   } else {
     _computeTubeSize(_st.tubes.length);
-    // Re-setup canvases in case size changed
     _tubeEls.forEach(el => {
       const ctx = _setupTubeCanvas(el.canvas);
       el.ctx = ctx;
     });
   }
   _st.tubes.forEach((_, ti) => {
-    if (_anim && ti === _anim.si) return; // animated on overlay
+    if (_anim && ti === _anim.si) return;
     _redrawTube(ti);
-    // Apply hint / selected CSS classes
     const wrapper = _tubeEls[ti].wrapper;
     wrapper.classList.toggle('selected',  ti === _st.selectedTube);
-    wrapper.classList.toggle('hint-src',  !!(  _st.hintMove && ti === _st.hintMove.src));
-    wrapper.classList.toggle('hint-dst',  !!(  _st.hintMove && ti === _st.hintMove.dst));
-    wrapper.classList.toggle('idle-breathe', !_st.animating && !_st.won && ti !== _st.selectedTube && !_celeb && !_anim);
+    wrapper.classList.toggle('hint-src',  !!(_st.hintMove && ti === _st.hintMove.src));
+    wrapper.classList.toggle('hint-dst',  !!(_st.hintMove && ti === _st.hintMove.dst));
   });
 }
 
 /* ===================================================================
-   POUR ANIMATION KICK-OFF
+   POUR ANIMATION KICK-OFF — lip-anchored
    =================================================================== */
 function _startPourAnim(si, di, moveResult) {
   const srcEl = _tubeEls[si], dstEl = _tubeEls[di];
   if (!srcEl || !dstEl) {
-    // Fallback: instant
     _st.animating = false;
     _renderTubesAll();
     _afterMove();
@@ -1211,26 +1227,39 @@ function _startPourAnim(si, di, moveResult) {
   const dRect = dstEl.wrapper.getBoundingClientRect();
 
   const srcCx = sRect.left + sRect.width / 2;
-  const srcCy = sRect.bottom - 7; // matches canvas bottom-centre offset
+  const srcCy = sRect.bottom - 7;
   const dstCx = dRect.left + dRect.width / 2;
+  const dstCy = dRect.top + 7; // top of dest tube (mouth)
 
   const tiltDir = dstCx >= srcCx ? 1 : -1;
-  const srcFill = moveResult.prePourSrc.length / TUBE_CAPACITY;
-  const pourDeg = 55 + (1 - srcFill) * 20;
-  const pourAngle = tiltDir * pourDeg * Math.PI / 180;
-  const streamStart = tiltDir * pourDeg * 0.60 * Math.PI / 180;
 
-  // Hide source canvas (we draw it on the overlay during animation)
+  // Lip target: directly above horizontal center of dest mouth
+  const lipTargetX = dstCx;
+  const lipTargetY = dstCy - _tubeW * 0.5;
+
+  // Original lip position (upright source tube, lip side)
+  const srcLipOrigX = srcCx + tiltDir * _tubeW / 2;
+  const srcLipOrigY = srcCy - _tubeH;
+
+  // Compute timing
+  const units = moveResult.units;
+  const P1_DUR = 450; // travel + tilt
+  const P2_DUR = 600 + units * 100; // pour
+  const P3_DUR = 400; // return
+
+  // Hide source canvas
   srcEl.canvas.style.visibility = 'hidden';
 
-  Sound.startPour(dRect.bottom - (moveResult.prePourDst.length / TUBE_CAPACITY) * _tubeH);
+  Sound.startPour(moveResult.prePourDst.length / TUBE_CAPACITY);
   Haptic.pour();
 
   _anim = {
     type:          moveResult.moveType,
     si, di,
     srcCx, srcCy, dstCx,
-    pourAngle, streamStart, tiltDir,
+    tiltDir,
+    lipTargetX, lipTargetY,
+    srcLipOrigX, srcLipOrigY,
     srcColor:      moveResult.srcColor || tubeTop(moveResult.prePourSrc),
     fillColor:     moveResult.moveType === 'fuse' ? moveResult.fusionResult : (moveResult.srcColor || tubeTop(moveResult.prePourSrc)),
     fusionResult:  moveResult.fusionResult,
@@ -1242,26 +1271,21 @@ function _startPourAnim(si, di, moveResult) {
     prevTubes:     moveResult.prevTubesAll,
     fuseDone:      false,
     startTime:     performance.now(),
-    // Timeline (ms)
-    P0: 150,  // lift + approach
-    P1: 280,  // tilt
-    P2: 520,  // pour
-    P3: 160,  // untilt
-    P4: 190,  // return + bounce
+    P1_DUR, P2_DUR, P3_DUR,
   };
 
   _startRaf();
 }
 
 /* ===================================================================
-   SHAKE
+   SHAKE — 3 oscillations, 250ms
    =================================================================== */
 function _shake(si, di) {
   [si, di].forEach(idx => {
     const el = _tubeEls[idx];
     if (!el) return;
     el.wrapper.classList.add('shake');
-    setTimeout(() => el.wrapper && el.wrapper.classList.remove('shake'), 400);
+    setTimeout(() => el.wrapper && el.wrapper.classList.remove('shake'), 260);
   });
 }
 
@@ -1376,6 +1400,7 @@ function _parseURL() {
   const p = new URLSearchParams(window.location.search);
   if (p.has('level')) { const n=parseInt(p.get('level'),10); if(n>0){_st.levelNum=n;_st._jumpLevel=n;} }
   if (p.has('seed')) _st._forcedSeed = parseInt(p.get('seed'),10);
+  if (p.has('slowmo')) _slowmo = parseFloat(p.get('slowmo')) || 1.0;
 }
 
 function _loadSave() {
@@ -1592,7 +1617,7 @@ function _renderTarget() {
     tube.className = 'target-tube';
     for (let i = 0; i < TUBE_CAPACITY; i++) {
       const u = document.createElement('div');
-      u.className = 'target-unit'; u.style.background = info.hex;
+      u.className = 'target-unit'; u.style.background = _hex(color);
       const cb = document.createElement('span'); cb.className = 'cb'; cb.textContent = info.symbol;
       u.appendChild(cb); tube.appendChild(u);
     }
@@ -1608,15 +1633,34 @@ function _onTap(idx) {
     if (!_st.tubes[idx].length) return;
     _st.selectedTube = idx;
     Sound.select(); Haptic.select();
+    // Lift selected tube
+    const el = _tubeEls[idx];
+    if (el) {
+      el.wrapper.style.transition = 'transform 0.15s ease-out';
+      el.wrapper.style.transform = 'translateY(-' + Math.round(_tubeW * 0.25) + 'px)';
+    }
     _renderTubesAll(); return;
   }
 
   if (_st.selectedTube === idx) {
     Sound.deselect();
+    // Lower tube back
+    const el = _tubeEls[idx];
+    if (el) {
+      el.wrapper.style.transition = 'transform 0.15s ease-out';
+      el.wrapper.style.transform = '';
+    }
     _st.selectedTube = -1; _renderTubesAll(); return;
   }
 
   const si = _st.selectedTube;
+  // Lower previously selected tube
+  const prevEl = _tubeEls[si];
+  if (prevEl) {
+    prevEl.wrapper.style.transition = 'transform 0.15s ease-out';
+    prevEl.wrapper.style.transform = '';
+  }
+
   const analysis = analyzePour(_st.tubes, si, idx);
 
   if (analysis.type === 'illegal') {
@@ -1638,7 +1682,6 @@ function _onTap(idx) {
   _checkCombo(result.moveType === 'fuse');
   _renderHUD();
 
-  // Gather info for animation
   const moveResult = {
     moveType:     result.moveType,
     srcColor:     result.moveType === 'fuse' ? result.srcColor : (result.color || tubeTop(prevSrc)),
@@ -1652,7 +1695,6 @@ function _onTap(idx) {
   };
 
   if (_reducedMotion()) {
-    // Instant, no animation
     _renderTubesAll();
     _st.animating = false;
     _afterMove();
@@ -1843,7 +1885,7 @@ function _startCelebration(stars, moves, par, target, code) {
     Sound.win();
     return;
   }
-  const colors = target.map(function(c){return COLOR_INFO[c].hex;});
+  const colors = target.map(function(c){return _hex(c);});
   _celeb = {
     startTime: performance.now(),
     stars: stars, moves: moves, par: par, code: code, colors: colors, target: target,
@@ -2064,7 +2106,7 @@ function _showCombo(n) {
 }
 
 /* ===================================================================
-   IDLE LIFE — background shapes, tube breathing
+   BACKGROUND — faint doodle pattern + ambient shapes
    =================================================================== */
 function _initBg() {
   _bgCanvas = document.getElementById('bg-canvas');
@@ -2075,6 +2117,10 @@ function _initBg() {
   _bgCanvas.style.width = W+'px'; _bgCanvas.style.height = H+'px';
   _bgCtx = _bgCanvas.getContext('2d');
   _bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // Draw faint tiled doodle pattern
+  _drawDoodlePattern(_bgCtx, W, H);
+
   _bgShapes = [];
   for (var i = 0; i < 7; i++) {
     _bgShapes.push({
@@ -2087,10 +2133,86 @@ function _initBg() {
   }
 }
 
-function _tickBg() {
+function _drawDoodlePattern(ctx, W, H) {
+  // Draw simple line-art doodles at ~5% opacity, tiled
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 1.2;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  const tileSize = 80;
+  const doodles = [_doodleDroplet, _doodleFlask, _doodleStar, _doodlePlanet, _doodleGem, _doodleRocket];
+
+  for (let y = 0; y < H + tileSize; y += tileSize) {
+    for (let x = 0; x < W + tileSize; x += tileSize) {
+      const di = (Math.floor(x / tileSize) + Math.floor(y / tileSize) * 3) % doodles.length;
+      ctx.save();
+      ctx.translate(x + tileSize/2, y + tileSize/2);
+      doodles[di](ctx, tileSize * 0.3);
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+}
+
+function _doodleDroplet(ctx, s) {
+  ctx.beginPath();
+  ctx.moveTo(0, -s);
+  ctx.quadraticCurveTo(s*0.8, s*0.2, 0, s);
+  ctx.quadraticCurveTo(-s*0.8, s*0.2, 0, -s);
+  ctx.stroke();
+}
+function _doodleFlask(ctx, s) {
+  ctx.beginPath();
+  ctx.moveTo(-s*0.2, -s); ctx.lineTo(s*0.2, -s);
+  ctx.lineTo(s*0.2, -s*0.3); ctx.lineTo(s*0.6, s*0.6);
+  ctx.quadraticCurveTo(s*0.6, s, 0, s);
+  ctx.quadraticCurveTo(-s*0.6, s, -s*0.6, s*0.6);
+  ctx.lineTo(-s*0.2, -s*0.3); ctx.closePath(); ctx.stroke();
+}
+function _doodleStar(ctx, s) {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = i * Math.PI / 5 - Math.PI / 2;
+    const r = i % 2 === 0 ? s : s * 0.4;
+    if (i === 0) ctx.moveTo(r * Math.cos(a), r * Math.sin(a));
+    else ctx.lineTo(r * Math.cos(a), r * Math.sin(a));
+  }
+  ctx.closePath(); ctx.stroke();
+}
+function _doodlePlanet(ctx, s) {
+  ctx.beginPath(); ctx.arc(0, 0, s*0.6, 0, Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(0, 0, s, s*0.25, -0.3, 0, Math.PI*2); ctx.stroke();
+}
+function _doodleGem(ctx, s) {
+  ctx.beginPath();
+  ctx.moveTo(0, -s); ctx.lineTo(s*0.7, -s*0.3);
+  ctx.lineTo(s*0.5, s*0.8); ctx.lineTo(0, s);
+  ctx.lineTo(-s*0.5, s*0.8); ctx.lineTo(-s*0.7, -s*0.3);
+  ctx.closePath(); ctx.stroke();
+}
+function _doodleRocket(ctx, s) {
+  ctx.beginPath();
+  ctx.moveTo(0, -s);
+  ctx.quadraticCurveTo(s*0.4, -s*0.3, s*0.3, s*0.5);
+  ctx.lineTo(s*0.6, s*0.9); ctx.lineTo(0, s*0.6);
+  ctx.lineTo(-s*0.6, s*0.9); ctx.lineTo(-s*0.3, s*0.5);
+  ctx.quadraticCurveTo(-s*0.4, -s*0.3, 0, -s);
+  ctx.stroke();
+}
+
+function _tickBg(now) {
   if (!_bgCtx || _reducedMotion()) return;
   var W = window.innerWidth, H = window.innerHeight;
-  _bgCtx.clearRect(0, 0, W, H);
+  var dpr = Math.min(devicePixelRatio||1, 2);
+
+  // Redraw: clear then re-draw doodle pattern + floating shapes
+  _bgCtx.setTransform(1,0,0,1,0,0);
+  _bgCtx.clearRect(0, 0, _bgCanvas.width, _bgCanvas.height);
+  _bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  _drawDoodlePattern(_bgCtx, W, H);
+
+  // Update and draw floating ambient shapes
   for (var i = 0; i < _bgShapes.length; i++) {
     var s = _bgShapes[i];
     s.x += s.vx * 0.016; s.y += s.vy * 0.016;
@@ -2098,17 +2220,23 @@ function _tickBg() {
     if (s.x > W + s.r) s.x = -s.r;
     if (s.y < -s.r) s.y = H + s.r;
     if (s.y > H + s.r) s.y = -s.r;
-    var g = _bgCtx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r);
-    g.addColorStop(0, 'hsla('+Math.round(s.hue)+',55%,45%,'+s.alpha+')');
-    g.addColorStop(1, 'hsla('+Math.round(s.hue)+',55%,45%,0)');
-    _bgCtx.fillStyle = g;
-    _bgCtx.beginPath(); _bgCtx.arc(s.x, s.y, s.r, 0, Math.PI*2); _bgCtx.fill();
     s.hue = (s.hue + 0.008) % 360;
+
+    // Draw soft radial gradient blob
+    _bgCtx.save();
+    var grad = _bgCtx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r);
+    grad.addColorStop(0, 'hsla(' + Math.round(s.hue) + ',60%,50%,' + s.alpha.toFixed(4) + ')');
+    grad.addColorStop(1, 'hsla(' + Math.round(s.hue) + ',60%,50%,0)');
+    _bgCtx.fillStyle = grad;
+    _bgCtx.beginPath();
+    _bgCtx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    _bgCtx.fill();
+    _bgCtx.restore();
   }
 }
 
 /* ===================================================================
-   HINT ARROW — glowing pulse between source and destination
+   HINT ARROW
    =================================================================== */
 function _drawHintArrow(ctx, now) {
   var h = _st.hintMove;

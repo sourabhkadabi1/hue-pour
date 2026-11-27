@@ -179,7 +179,9 @@ body.colorblind .target-unit .cb { display: flex; }
   flex: 1; min-height: 0;
   display: flex; flex-wrap: wrap;
   align-items: center; justify-content: center; align-content: center;
-  gap: var(--tube-gap, 12px); padding: 8px 12px;
+  column-gap: var(--tube-gap, 12px);
+  row-gap: var(--row-gap, 12px);
+  padding: 8px 12px;
 }
 
 /* ---- Tube Wrapper ---- */
@@ -188,7 +190,7 @@ body.colorblind .target-unit .cb { display: flex; }
   /* Size driven by canvas inside */
 }
 
-.tube-wrapper.shake  { animation: shake 0.36s ease; }
+.tube-wrapper.shake  { animation: shake 0.25s ease; }
 .tube-wrapper.selected { animation: bobbing 0.95s ease-in-out infinite; }
 .tube-wrapper.hint-src { filter: drop-shadow(0 0 8px rgba(79,195,247,0.8)); }
 .tube-wrapper.hint-dst { filter: drop-shadow(0 0 8px rgba(105,240,174,0.8)); }
@@ -215,11 +217,11 @@ body.colorblind .cb-src { display: block; }
 
 @keyframes shake {
   0%,100% { transform: translateX(0); }
-  15%     { transform: translateX(-6px); }
-  30%     { transform: translateX( 6px); }
-  45%     { transform: translateX(-5px); }
-  60%     { transform: translateX( 4px); }
-  75%     { transform: translateX(-2px); }
+  17%     { transform: translateX(-6px); }
+  33%     { transform: translateX( 6px); }
+  50%     { transform: translateX(-5px); }
+  67%     { transform: translateX( 5px); }
+  83%     { transform: translateX(-2px); }
 }
 
 @keyframes hintPulse {
