@@ -1,10 +1,10 @@
 # Hue Pour 🎨
 
-A color-mixing puzzle game — pour liquids between glass tubes to create target colors. 100% offline, no external libraries.
+A 12-color mixing puzzle game — pour liquids between glass tubes to blend and create target colors. 100% offline, Capacitor-ready, no external libraries.
 
-## Play
+## Play & Test
 
-Open `www/index.html` in a browser, or serve it locally:
+Open `www/index.html` in a browser (or `www/tests.html` for the 2,000-seed generator validation suite), or serve locally:
 
 ```bash
 cd www
@@ -14,71 +14,38 @@ python -m http.server 8765
 
 ## Features
 
-### Core Gameplay
-- **Color mixing**: Pour primary colors between tubes to create secondary/tertiary colors via realistic fusion rules.
-- **Progressive levels**: Procedurally generated with increasing difficulty. Solver-verified par for every level.
-- **Daily Puzzle**: Same puzzle for everyone each day (seeded by date). Streak tracking in localStorage.
-- **Challenge Codes**: Encode any puzzle as a short `HP-XXXX` code to share with friends.
-- **Tutorial**: Interactive hints for levels 1-3, skippable.
-- **Undo / Hint / Restart**: 3 free undos per level; watch a (mock) rewarded ad for more. Hints highlight one optimal move.
+### Core Gameplay & 12-Color Wheel
+- **12-color wheel** stored in a single `FUSION_TABLE` data object in `www/game.js`:
+  - **Primaries**: Red (`#E53935`), Yellow (`#FFD93B`), Blue (`#2F7DF6`)
+  - **Secondaries**: Orange (`#FF8A1F`), Green (`#2ECC71`), Purple (`#8E44AD`)
+  - **Tertiaries** (cannot fuse further): Vermilion (`#FF5A36`), Amber (`#FFB020`), Lime (`#A6D930`), Teal (`#1BB3A5`), Indigo (`#4B4BD6`), Magenta (`#D63384`)
+- **Fusion rules**: Red+Yellow=Orange, Yellow+Blue=Green, Blue+Red=Purple, Red+Orange=Vermilion, Yellow+Orange=Amber, Yellow+Green=Lime, Blue+Green=Teal, Blue+Purple=Indigo, Red+Purple=Magenta (order-independent).
+- **Large levels**: Supports up to **10 targets** and **14 tubes** with responsive multi-row and compact target palette layouts.
+- **Deterministic reverse-move generator**: Generates levels by reverse moves from the solved state while recording the forward solution, validates every level via `replayMoves`, and tightens `par` with a capped BFS solver for levels with ≤ 5 targets.
+- **Daily Puzzle**: Same puzzle for everyone each day (seeded by date). Streak tracking in `localStorage`.
+- **Challenge Codes**: Encode puzzles (1–10 targets) as short `HP-XXXX` codes with checksum to share with friends.
+- **Tutorial, Undo, Hint, Restart**: 3 free undos per level + rewarded ad option; solver/heuristic hints; skippable tutorial for levels 1–3.
 
-### Visuals & Animation (v4)
-- **Glass tubes**: Rounded bottom, flared rim, inner highlight, shadow — all canvas-drawn.
-- **Liquid rendering**: Smooth vertical gradients with glossy highlights, soft layer boundaries, damped-sine surface wave.
-- **Pour animation** (~1.0-1.4s): Tube lifts, tilts, streams liquid with a curved gravity path, splashes, drains/fills smoothly, returns with a settle bounce. Liquid surface stays horizontal in world space via clip-path.
-- **Fusion moment**: Two colors swirl together, glowing ring pulses, sparkles float up in the new color.
-- **Tube completed**: Glass "ting" sound, shine sweep, glowing cap with sparkles.
-- **Layout**: Centered phone-width column (max 480px), tubes wrap to two rows when >5.
-
-### Celebrations & Juice (v5)
-- **Level complete sequence** (~3s, tap to skip):
-  - Finished tubes hop one-by-one with rising pentatonic notes.
-  - Confetti burst (rectangles, stars, circles, ribbons) with gravity, spin and fade-out (capped at 150).
-  - Soft expanding shockwave ring and background brighten.
-  - Ribbon banner with elastic bounce: "GREAT!", "BRILLIANT!", "SPLENDID!", "AMAZING!" (3-star: "PERFECT!" + extra screen shake).
-  - Three stars pop in with a "ding" sound.
-  - Animated moves count-up next to par.
-  - Pulsing NEXT button.
-  - Victory arpeggio + whoosh sound (all WebAudio synthesized).
-- **Combo flash**: Consecutive fusions show "Chain x2!" text floating up with sparkle.
-- **Idle life**: Tubes gently breathe (subtle scale/bob), slow liquid shimmer, soft drifting background shapes with parallax. Pauses when tab is hidden.
-- **Hint arrow**: Glowing pulsing curved arrow between suggested source and destination tubes.
-- **Progress bar**: Home screen shows levels completed in current world (groups of 10), with milestone celebration every 5 levels.
-- **Button feel**: Every button squishes on press with a soft click sound.
-- **Star sky**: Twinkling stars in the win overlay background.
-- **Reduce effects**: Settings toggle disables particles, confetti, combo, idle breathing, screen shake. Also respects `prefers-reduced-motion`.
+### Visuals, Accessibility & Performance
+- **60 fps canvas rendering**: Lip-anchored pour animation, fusion particle bursts, cached background doodle layer, crisp band separators between neighboring colors.
+- **Colorblind mode**: 12 distinct high-contrast symbols (`● ▼ ◆ ✕ ▲ ≡ ★ ○ ■ ≈ ✚ □`), chosen so no neighboring wheel colors share similar shapes.
+- **Reduce effects**: Disables particles, confetti, combo flash, idle breathing, and screen shake; also respects `prefers-reduced-motion`.
+- **Audio & Saves**: All sounds synthesized via WebAudio; all `localStorage` access wrapped in `try/catch`.
 
 ### Monetization (mock stubs)
-- `showInterstitial()` — full-screen fake "Ad" overlay (3s countdown). Triggers after every 4th level, never in first 5.
-- `showRewarded()` — fake 3s ad, resolves `true`. Used for extra hints and undos.
-- `purchaseRemoveAds()` / `isAdsRemoved()` / `restorePurchases()` — mock flag in localStorage.
-- All mock behavior marked with `// REPLACE WITH REAL SDK` comments in `monetization.js`.
-
-### Share
-- **Text share**: "Hue Pour #N — solved in X moves (par Y) 🟧🟩🟪" via `navigator.share` or clipboard.
-- **Image share**: 1080×1920 canvas card with gradient, game name, level, moves, stars. Save or share as PNG.
+- `monetization.js` exposes `purchaseRemoveAds`, `restorePurchases`, `isAdsRemoved`, `showInterstitial`, and `showRewarded` (marked with `// REPLACE WITH REAL SDK`).
 
 ## Files
 
 | File | Purpose |
 |---|---|
 | `www/index.html` | Single-page app shell |
-| `www/style.css` | All styles (responsive, accessibility) |
-| `www/game.js` | Game logic, solver, level generator — **never modified by visual updates** |
-| `www/ui.js` | Rendering, animation, sound, celebrations, all UI |
+| `www/style.css` | All styles (responsive 320px+, accessibility, compact targets) |
+| `www/game.js` | Pure game logic: 12-color wheel, `FUSION_TABLE`, pour rules, BFS solver, reverse-move generator, replay validator |
+| `www/ui.js` | Rendering, animation, WebAudio sound, celebrations, all UI |
 | `www/monetization.js` | Mock ad/IAP stubs |
-
-## Accessibility
-- ARIA labels on interactive elements.
-- Responsive layout: 320px to 430px+ wide.
-- Colorblind mode toggle.
-- Reduce effects / prefers-reduced-motion support.
-
-## Performance
-- 60fps target on mid-range phones.
-- Particle caps: 120 (sparkles) + 150 (confetti).
-- `requestAnimationFrame` loop, cleaned up listeners and canvases.
-- No memory leaks — all animations and event listeners properly torn down.
+| `www/tests.html` | Automated test runner (rule checks + 1–10 targets × 200 seeds replay validation) |
+| `www/README.md` | Detailed generator, solver, and color system notes |
 
 ## License
 

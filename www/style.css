@@ -158,7 +158,8 @@ html, body {
   font-size: 12px; font-weight: 700; color: #555;
   text-transform: uppercase; letter-spacing: 1px;
 }
-#target-tubes { display: flex; gap: 6px; align-items: flex-end; }
+#target-tubes { display: flex; gap: 6px; align-items: flex-end; flex-wrap: wrap; justify-content: center; }
+#target-tubes.compact { gap: 4px; }
 .target-tube {
   width: 20px; height: 40px;
   border: 1.5px solid rgba(255,255,255,0.18); border-top: none;
@@ -166,12 +167,17 @@ html, body {
   display: flex; flex-direction: column-reverse; overflow: hidden;
   background: rgba(255,255,255,0.03);
 }
+.target-tube.target-compact {
+  width: 15px; height: 32px;
+  border-radius: 0 0 5px 5px;
+}
 .target-unit { width: 100%; flex: 1; position: relative; }
 .target-unit .cb {
-  font-size: 7px; position: absolute; inset: 0;
+  font-size: 7px; font-weight: 900; position: absolute; inset: 0;
   display: none; align-items: center; justify-content: center;
-  color: rgba(0,0,0,0.5);
+  color: #fff; text-shadow: 0 0 2px #000, 0 1px 2px rgba(0,0,0,0.95);
 }
+.target-tube.target-compact .target-unit .cb { font-size: 6px; }
 body.colorblind .target-unit .cb { display: flex; }
 
 /* ---- Tube Area ---- */

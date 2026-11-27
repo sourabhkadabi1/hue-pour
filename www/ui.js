@@ -7,13 +7,9 @@
 'use strict';
 
 /* ===================================================================
-   COLOR OVERRIDES  — spec palette, game.js stays untouched
+   COLOR HELPERS  — single source of truth from game.js COLOR_INFO
    =================================================================== */
-const NEW_HEX = {
-  RED:'#E53935', YELLOW:'#FFD93B', BLUE:'#2F7DF6',
-  ORANGE:'#FF8A1F', GREEN:'#2ECC71', PURPLE:'#8E44AD',
-};
-function _hex(c) { return NEW_HEX[c] || COLOR_INFO[c].hex; }
+function _hex(c) { return COLOR_INFO[c].hex; }
 
 function _hexToRgb(h) {
   return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
@@ -604,10 +600,12 @@ function drawTubeOnCtx(ctx, cx, cy, w, h, angle, bands, waveState, opts) {
       ctx.fillStyle = hex;
       ctx.fillRect(cx - w * 1.5, bt, w * 3, bh + 0.5);
 
-      // Sharp boundary line between bands
+      // Crisp boundary line between bands so adjacent wheel colours stay distinct
       if (i > 0) {
-        ctx.fillStyle = 'rgba(0,0,0,0.12)';
-        ctx.fillRect(cx - w * 1.5, curY - 0.5, w * 3, 1);
+        ctx.fillStyle = 'rgba(0,0,0,0.34)';
+        ctx.fillRect(cx - w * 1.5, curY - 0.8, w * 3, 1.6);
+        ctx.fillStyle = 'rgba(255,255,255,0.16)';
+        ctx.fillRect(cx - w * 1.5, curY - 1.6, w * 3, 0.8);
       }
 
       // Surface wave on topmost band
@@ -627,15 +625,22 @@ function drawTubeOnCtx(ctx, cx, cy, w, h, angle, bands, waveState, opts) {
         ctx.fill();
       }
 
-      // Colorblind symbol on each unit
+      // Colorblind symbol on each unit (dark outline + white fill for high contrast on all 12 hues)
       if (opts.colorblind) {
         const sym = COLOR_INFO[band.color].symbol;
-        ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        ctx.font = 'bold ' + Math.max(9, w * 0.18) + 'px sans-serif';
+        const fs = Math.max(10, Math.round(w * 0.24));
+        ctx.font = 'bold ' + fs + 'px sans-serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.lineWidth = Math.max(2, w * 0.055);
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = 'rgba(0,0,0,0.68)';
+        ctx.fillStyle = 'rgba(255,255,255,0.94)';
         for (let u = 0; u < Math.ceil(band.units); u++) {
           const symY = curY - (u + 0.5) * unitH;
-          ctx.fillText(sym, cx, symY);
+          if (symY - bt >= unitH * 0.25) {
+            ctx.strokeText(sym, cx, symY);
+            ctx.fillText(sym, cx, symY);
+          }
         }
       }
 
@@ -1111,22 +1116,34 @@ function _computeTubeSize(n) {
   const area = document.getElementById('tube-area');
   if (!area) return;
   const colW = Math.min(480, area.clientWidth);
+  const availW = Math.max(200, colW - 24);
   const aH = area.clientHeight - 16;
 
-  _tubeW = Math.max(40, Math.round(colW * 0.115));
+  const rows = n <= 5 ? 1 : (n <= 10 ? 2 : 3);
+  const cols = Math.ceil(n / rows);
+  const gapFrac = cols >= 5 ? 0.44 : 0.56;
+  const rowGapFrac = rows > 2 ? 0.45 : (rows === 2 ? 0.7 : 0.6);
+
+  _tubeW = Math.max(28, Math.round(colW * (n <= 10 ? 0.115 : 0.092)));
+
+  // Constrain horizontally so `cols` tubes fit on one row without accidental wrapping
+  const maxWForCols = (availW - cols * 10) / (cols + (cols - 1) * gapFrac);
+  if (maxWForCols > 0 && _tubeW > maxWForCols) {
+    _tubeW = Math.max(24, Math.floor(maxWForCols));
+  }
+
   _tubeH = Math.round(_tubeW * 3.7);
-  const GAP = Math.round(_tubeW * 0.6);
+  let GAP = Math.max(6, Math.round(_tubeW * gapFrac));
+  let rowGap = Math.round(_tubeH * rowGapFrac);
 
-  const cols = n <= 5 ? n : Math.ceil(n / 2);
-  const rows = n <= 5 ? 1 : 2;
-  const rowGap = Math.round(_tubeH * 0.8);
-
-  // Ensure it fits vertically
-  const needH = rows * _tubeH + (rows - 1) * rowGap;
+  // Constrain vertically so all `rows` fit cleanly inside #tube-area
+  const needH = rows * (_tubeH + 14) + (rows - 1) * rowGap;
   if (needH > aH && aH > 0) {
-    const scale = aH / needH;
-    _tubeH = Math.floor(_tubeH * scale);
-    _tubeW = Math.round(_tubeH / 3.7);
+    const maxHPerTube = (aH - rows * 14) / (rows + (rows - 1) * rowGapFrac);
+    _tubeH = Math.max(88, Math.floor(maxHPerTube));
+    _tubeW = Math.max(24, Math.round(_tubeH / 3.7));
+    GAP = Math.max(6, Math.round(_tubeW * gapFrac));
+    rowGap = Math.round(_tubeH * rowGapFrac);
   }
 
   document.documentElement.style.setProperty('--tube-w', _tubeW + 'px');
@@ -1295,6 +1312,7 @@ function _shake(si, di) {
 let _st = {
   mode: 'home',
   levelNum: 1, tubes: [], target: [], par: 0,
+  initialTubes: [], forwardMoves: [],
   moveCount: 0, history: [], selectedTube: -1,
   animating: false, won: false,
   undosLeft: 3, FREE_UNDOS: 3,
@@ -1497,6 +1515,7 @@ function _goHome() {
   Sound.stopAmbience();
   _st.mode = 'home'; _st.animating = false; _st.won = false; _st.hintMove = null;
   _anim = null;
+  if (_movesTimer) { clearInterval(_movesTimer); _movesTimer = null; }
   if (_celeb) {
     try { document.removeEventListener('pointerdown', _skipCelebration); } catch(e){}
     _celeb = null;
@@ -1529,10 +1548,13 @@ function _startLevel(num) {
   _st.moveCount = 0; _st.history = []; _st.selectedTube = -1;
   _st.animating = false; _st.undosLeft = _st.FREE_UNDOS; _st.hintMove = null;
   _waves = {}; _anim = null;
+  if (_movesTimer) { clearInterval(_movesTimer); _movesTimer = null; }
   _showOverlay(dom.winOverlay, false);
   const seed = _st._forcedSeed !== undefined ? _st._forcedSeed : undefined;
   const lv = generateLevel(num, seed);
   _st.tubes = lv.tubes; _st.target = lv.target; _st.par = lv.par;
+  _st.initialTubes = cloneTubes(lv.tubes);
+  _st.forwardMoves = lv.forwardMoves || [];
   _st._currentSeed = lv.seed; _st._currentDiff = lv.target.length;
   _showGame('Level ' + num);
   _renderAll(); _persist(); _maybeStartTut(num);
@@ -1544,8 +1566,11 @@ function _startDaily() {
   _st.mode = 'daily'; _st.won = false; _st.moveCount = 0; _st.history = [];
   _st.selectedTube = -1; _st.animating = false; _st.undosLeft = _st.FREE_UNDOS; _st.hintMove = null;
   _waves = {}; _anim = null;
+  if (_movesTimer) { clearInterval(_movesTimer); _movesTimer = null; }
   const lv = generateDailyLevel();
   _st.tubes = lv.tubes; _st.target = lv.target; _st.par = lv.par;
+  _st.initialTubes = cloneTubes(lv.tubes);
+  _st.forwardMoves = lv.forwardMoves || [];
   _st.dailyDayNum = lv.dayNum; _st.dailySeed = lv.seed;
   _st._currentSeed = lv.seed; _st._currentDiff = lv.target.length;
   _showGame('Daily #' + lv.dayNum); _renderAll();
@@ -1561,8 +1586,11 @@ function _loadCode() {
   _st.selectedTube = -1; _st.animating = false; _st.undosLeft = _st.FREE_UNDOS; _st.hintMove = null;
   _st.challengeCode = raw.toUpperCase(); _st.challengeSeed = lv.seed; _st.challengeDiff = lv.difficulty;
   _st.tubes = lv.tubes; _st.target = lv.target; _st.par = lv.par;
+  _st.initialTubes = cloneTubes(lv.tubes);
+  _st.forwardMoves = lv.forwardMoves || [];
   _st._currentSeed = lv.seed; _st._currentDiff = lv.difficulty;
   _waves = {}; _anim = null;
+  if (_movesTimer) { clearInterval(_movesTimer); _movesTimer = null; }
   _showGame('Challenge'); _renderAll(); dom.codeInput.value = '';
 }
 
@@ -1576,7 +1604,10 @@ function _maybeStartTut(n) {
 
 function _showTutHint() {
   if (!_st.tutorialActive) return;
-  const hint = getHint(_st.tubes, _st.target);
+  const hint = getHint(_st.tubes, _st.target, {
+    initialTubes: _st.initialTubes,
+    forwardMoves: _st.forwardMoves,
+  });
   if (!hint) { _skipTut(); return; }
   _st.hintMove = hint;
   const st = tubeTop(_st.tubes[hint.src]), dt = tubeTop(_st.tubes[hint.dst]);
@@ -1611,10 +1642,12 @@ function _renderHUD() {
 
 function _renderTarget() {
   dom.targetTubes.innerHTML = '';
+  const compact = _st.target.length > 7;
+  dom.targetTubes.classList.toggle('compact', compact);
   for (const color of _st.target) {
     const info = COLOR_INFO[color];
     const tube = document.createElement('div');
-    tube.className = 'target-tube';
+    tube.className = 'target-tube' + (compact ? ' target-compact' : '');
     for (let i = 0; i < TUBE_CAPACITY; i++) {
       const u = document.createElement('div');
       u.className = 'target-unit'; u.style.background = _hex(color);
@@ -1827,7 +1860,10 @@ function _onHint() {
   Toast.show('Watch a short ad for a hint');
   Monetization.showRewarded().then(ok => {
     if (!ok) return;
-    const hint = getHint(_st.tubes, _st.target);
+    const hint = getHint(_st.tubes, _st.target, {
+      initialTubes: _st.initialTubes,
+      forwardMoves: _st.forwardMoves,
+    });
     if (hint) {
       _st.hintMove = hint; _renderTubesAll();
       const st2=tubeTop(_st.tubes[hint.src]);
@@ -1841,6 +1877,7 @@ function _onHint() {
 function _restart() {
   if (_st.animating) return;
   _waves = {}; _anim = null;
+  if (_movesTimer) { clearInterval(_movesTimer); _movesTimer = null; }
   if (_celeb) {
     try { document.removeEventListener('pointerdown', _skipCelebration); } catch(e){}
     _celeb = null;
@@ -1859,6 +1896,7 @@ function _restartChallenge() {
   _st.won=false; _st.moveCount=0; _st.history=[]; _st.selectedTube=-1; _st.animating=false;
   _st.undosLeft=_st.FREE_UNDOS; _st.hintMove=null;
   _st.tubes=lv.tubes; _st.target=lv.target; _st.par=lv.par;
+  _st.initialTubes=cloneTubes(lv.tubes); _st.forwardMoves=lv.forwardMoves||[];
   _renderAll();
 }
 
@@ -2039,7 +2077,9 @@ function _renderStarsAnimated(el, n) {
   }
 }
 
+let _movesTimer = null;
 function _animateMovesCount(el, target, par) {
+  if (_movesTimer) { clearInterval(_movesTimer); _movesTimer = null; }
   if (target <= 0) {
     el.innerHTML = 'Moves: <strong>' + target + '</strong> &nbsp;|&nbsp; Par: <strong>' + par + '</strong>';
     return;
@@ -2048,13 +2088,13 @@ function _animateMovesCount(el, target, par) {
   var interval = Math.max(25, Math.floor(400 / target));
   var strong = el.querySelector('strong');
   if (!strong) return;
-  var timer = setInterval(function(){
+  _movesTimer = setInterval(function(){
     cur++;
     strong.textContent = cur;
     strong.classList.remove('moves-countup');
     void strong.offsetWidth;
     strong.classList.add('moves-countup');
-    if (cur >= target) clearInterval(timer);
+    if (cur >= target) { clearInterval(_movesTimer); _movesTimer = null; }
   }, interval);
 }
 
@@ -2108,6 +2148,8 @@ function _showCombo(n) {
 /* ===================================================================
    BACKGROUND — faint doodle pattern + ambient shapes
    =================================================================== */
+let _bgDoodleCache = null;
+
 function _initBg() {
   _bgCanvas = document.getElementById('bg-canvas');
   if (!_bgCanvas) return;
@@ -2118,8 +2160,13 @@ function _initBg() {
   _bgCtx = _bgCanvas.getContext('2d');
   _bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  // Draw faint tiled doodle pattern
-  _drawDoodlePattern(_bgCtx, W, H);
+  // Cache static tiled doodle pattern onto an offscreen canvas for 60fps performance
+  _bgDoodleCache = document.createElement('canvas');
+  _bgDoodleCache.width = W*dpr; _bgDoodleCache.height = H*dpr;
+  var dCtx = _bgDoodleCache.getContext('2d');
+  dCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  _drawDoodlePattern(dCtx, W, H);
+  _bgCtx.drawImage(_bgDoodleCache, 0, 0, W, H);
 
   _bgShapes = [];
   for (var i = 0; i < 7; i++) {
@@ -2206,11 +2253,11 @@ function _tickBg(now) {
   var W = window.innerWidth, H = window.innerHeight;
   var dpr = Math.min(devicePixelRatio||1, 2);
 
-  // Redraw: clear then re-draw doodle pattern + floating shapes
+  // Redraw: clear then blit cached doodle pattern + floating shapes
   _bgCtx.setTransform(1,0,0,1,0,0);
   _bgCtx.clearRect(0, 0, _bgCanvas.width, _bgCanvas.height);
+  if (_bgDoodleCache) _bgCtx.drawImage(_bgDoodleCache, 0, 0);
   _bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  _drawDoodlePattern(_bgCtx, W, H);
 
   // Update and draw floating ambient shapes
   for (var i = 0; i < _bgShapes.length; i++) {

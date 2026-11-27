@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Hue Pour — Generator &amp; Rules Tests</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+      background: #0d0d2b; color: #e0e0e0; padding: 16px;
+    }
+    h1 { font-size: 22px; margin-bottom: 8px; color: #90caf9; }
+    h2 { font-size: 16px; margin: 16px 0 8px; color: #4fc3f7; }
+    .summary { margin-bottom: 12px; font-size: 14px; color: #aaa; line-height: 1.5; }
+    .controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+    .btn {
+      padding: 12px 24px; border: none; border-radius: 10px;
+      background: linear-gradient(135deg, #4fc3f7, #1565c0);
+      color: #fff; font-size: 15px; font-weight: 700; cursor: pointer;
+    }
+    .btn:disabled { opacity: 0.45; cursor: default; }
+    .banner {
+      padding: 10px 14px; border-radius: 8px; margin-bottom: 14px;
+      font-size: 14px; font-weight: 600;
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+    }
+    .banner.ok  { border-color: rgba(105,240,174,0.45); color: #69f0ae; }
+    .banner.bad { border-color: rgba(255,82,82,0.45);   color: #ff5252; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
+    th, td { border: 1px solid #2b2b4d; padding: 7px 10px; text-align: center; font-size: 13px; }
+    th { background: rgba(255,255,255,0.05); color: #90caf9; }
+    tfoot td { font-weight: 700; background: rgba(255,255,255,0.04); }
+    .pass { color: #69f0ae; }
+    .fail { color: #ff5252; }
+    .warn { color: #ffd93b; }
+    .running { color: #ffd93b; }
+    #log {
+      max-height: 260px; overflow-y: auto; padding: 10px;
+      background: rgba(0,0,0,0.35); border-radius: 8px;
+      font-size: 12px; line-height: 1.55; white-space: pre-wrap;
+    }
+    .progress-bar { height: 6px; background: rgba(255,255,255,0.07); border-radius: 3px; margin: 10px 0 14px; overflow: hidden; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #4fc3f7, #69f0ae); width: 0%; transition: width 0.15s; }
+  </style>
+</head>
+<body>
+
+<h1>Hue Pour — Generator &amp; Rules Test Suite</h1>
+<p class="summary">
+  Verifies the 12-colour wheel, fusion table rules, and runs <strong>200 seeds per target config (1–10 targets)</strong>,
+  replaying each recorded forward solution against real pour rules and reporting pass/fail counts and slowest generation time.
+</p>
+
+<div class="controls">
+  <button class="btn" id="btn-run" onclick="runTests()">▶ Run All Tests</button>
+</div>
+
+<div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
+<div class="banner" id="summary-banner">Preparing test suite…</div>
+
+<h2>1. Colour &amp; Fusion Rules</h2>
+<div class="banner" id="rules-banner">Pending…</div>
+
+<h2>2. Generator Replay Validation (200 seeds × 1–10 targets)</h2>
+<table id="results">
+  <thead>
+    <tr>
+      <th>Targets</th>
+      <th>Level#</th>
+      <th>Max Tubes</th>
+      <th>Seeds</th>
+      <th>Pass</th>
+      <th>Fail</th>
+      <th>Avg ms</th>
+      <th>Slowest ms</th>
+      <th>Avg Par</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody id="results-body"></tbody>
+  <tfoot id="results-foot"></tfoot>
+</table>
+
+<h2>Log</h2>
+<div id="log"></div>
+
+<script src="game.js"></script>
+<script>
+'use strict';
+
+const SEEDS_PER_CONFIG = 200;
+
+// Representative level number for each target count (1..10)
+const LEVEL_FOR_TARGETS = {
+  1: 3,    2: 10,   3: 20,   4: 30,   5: 40,
+  6: 55,   7: 70,   8: 85,   9: 100,  10: 115,
+};
+
+const logEl   = document.getElementById('log');
+const tbody   = document.getElementById('results-body');
+const tfoot   = document.getElementById('results-foot');
+const progEl  = document.getElementById('progress');
+const rulesEl = document.getElementById('rules-banner');
+const sumEl   = document.getElementById('summary-banner');
+
+function log(msg) {
+  logEl.textContent += msg + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function runRuleChecks() {
+  const errs = [];
+  if (ALL_COLORS.length !== 12) errs.push('Expected 12 colours, got ' + ALL_COLORS.length);
+
+  const syms = new Set(ALL_COLORS.map(c => COLOR_INFO[c] && COLOR_INFO[c].symbol));
+  if (syms.size !== 12) errs.push('Expected 12 unique colourblind symbols, got ' + syms.size);
+
+  const expectedRules = [
+    ['RED', 'YELLOW', 'ORANGE'],
+    ['YELLOW', 'BLUE', 'GREEN'],
+    ['BLUE', 'RED', 'PURPLE'],
+    ['RED', 'ORANGE', 'VERMILION'],
+    ['YELLOW', 'ORANGE', 'AMBER'],
+    ['YELLOW', 'GREEN', 'LIME'],
+    ['BLUE', 'GREEN', 'TEAL'],
+    ['BLUE', 'PURPLE', 'INDIGO'],
+    ['RED', 'PURPLE', 'MAGENTA'],
+  ];
+  for (const [a, b, r] of expectedRules) {
+    if (getFusionResult(a, b) !== r || getFusionResult(b, a) !== r) {
+      errs.push('Fusion mismatch for ' + a + ' + ' + b);
+    }
+    const ap = analyzePour([[a], [b]], 0, 1);
+    if (ap.type !== 'fuse' || ap.units !== 1 || ap.result !== r) {
+      errs.push('Pour rule mismatch for ' + a + ' -> ' + b);
+    }
+  }
+
+  for (const t of TERTIARIES) {
+    for (const o of ALL_COLORS) {
+      if (t === o) continue;
+      if (getFusionResult(t, o) !== null) {
+        errs.push('Tertiary ' + t + ' should not fuse with ' + o);
+      }
+      const ap = analyzePour([[t], [o]], 0, 1);
+      if (ap.type !== 'illegal') {
+        errs.push('Tertiary pour ' + t + ' -> ' + o + ' should be illegal');
+      }
+    }
+  }
+
+  if (errs.length === 0) {
+    rulesEl.textContent = '✓ All 12 colours, 12 unique colourblind symbols, 9 symmetric fusion rules, and tertiary non-fusion checks passed.';
+    rulesEl.className = 'banner ok';
+    return true;
+  } else {
+    rulesEl.textContent = '✗ Rule check failed: ' + errs.join('; ');
+    rulesEl.className = 'banner bad';
+    errs.forEach(e => log('RULE FAIL: ' + e));
+    return false;
+  }
+}
+
+async function runTests() {
+  const btn = document.getElementById('btn-run');
+  btn.disabled = true;
+  tbody.innerHTML = '';
+  tfoot.innerHTML = '';
+  logEl.textContent = '';
+  progEl.style.width = '0%';
+  sumEl.className = 'banner';
+  sumEl.textContent = 'Running tests…';
+
+  const rulesOk = runRuleChecks();
+  log('Starting generator tests: ' + SEEDS_PER_CONFIG + ' seeds per config (1–10 targets)...\n');
+
+  const totalConfigs = 10;
+  let totalPass = 0, totalFail = 0, globalSlowest = 0, globalTotalMs = 0;
+
+  for (let numTargets = 1; numTargets <= 10; numTargets++) {
+    const levelNum = LEVEL_FOR_TARGETS[numTargets];
+    const row = document.createElement('tr');
+    row.innerHTML =
+      '<td>' + numTargets + '</td>' +
+      '<td>' + levelNum + '</td>' +
+      '<td id="tubes-' + numTargets + '">—</td>' +
+      '<td>' + SEEDS_PER_CONFIG + '</td>' +
+      '<td class="pass" id="pass-' + numTargets + '">0</td>' +
+      '<td class="fail" id="fail-' + numTargets + '">0</td>' +
+      '<td id="avg-' + numTargets + '">—</td>' +
+      '<td id="slow-' + numTargets + '">—</td>' +
+      '<td id="par-' + numTargets + '">—</td>' +
+      '<td class="running" id="status-' + numTargets + '">Running…</td>';
+    tbody.appendChild(row);
+
+    let pass = 0, fail = 0, slowest = 0, totalMs = 0, maxTubesSeen = 0, parSum = 0;
+
+    for (let s = 0; s < SEEDS_PER_CONFIG; s++) {
+      const seed = s * 97 + 42;
+
+      const t0 = performance.now();
+      let ok = false;
+      try {
+        const lv = generateLevel(levelNum, seed);
+        if (!lv || !lv.tubes || !lv.target) {
+          log('  FAIL target=' + numTargets + ' seed=' + seed + ': no level returned');
+        } else if (lv.target.length !== numTargets) {
+          log('  FAIL target=' + numTargets + ' seed=' + seed + ': got ' + lv.target.length + ' targets');
+        } else if (lv.tubes.length > MAX_TUBES) {
+          log('  FAIL target=' + numTargets + ' seed=' + seed + ': tubes=' + lv.tubes.length + ' > ' + MAX_TUBES);
+        } else {
+          if (lv.tubes.length > maxTubesSeen) maxTubesSeen = lv.tubes.length;
+          const replay = replayMoves(lv.tubes, lv.forwardMoves, lv.target);
+          if (replay.success) {
+            ok = true;
+            parSum += lv.par;
+          } else {
+            log('  FAIL target=' + numTargets + ' seed=' + seed + ': replay failed at move ' + replay.failedAt);
+          }
+        }
+      } catch (e) {
+        log('  ERROR target=' + numTargets + ' seed=' + seed + ': ' + e.message);
+      }
+      const elapsed = performance.now() - t0;
+      totalMs += elapsed;
+      globalTotalMs += elapsed;
+      if (elapsed > slowest) slowest = elapsed;
+      if (elapsed > globalSlowest) globalSlowest = elapsed;
+
+      if (ok) pass++; else fail++;
+
+      if (s % 25 === 24 || s === SEEDS_PER_CONFIG - 1) {
+        document.getElementById('tubes-' + numTargets).textContent = maxTubesSeen || '—';
+        document.getElementById('pass-' + numTargets).textContent = pass;
+        document.getElementById('fail-' + numTargets).textContent = fail;
+        document.getElementById('avg-' + numTargets).textContent = (totalMs / (s + 1)).toFixed(2);
+        const slowEl = document.getElementById('slow-' + numTargets);
+        slowEl.textContent = slowest.toFixed(2);
+        slowEl.className = slowest > 150 ? 'fail' : (slowest > 100 ? 'warn' : '');
+        document.getElementById('par-' + numTargets).textContent = pass ? (parSum / pass).toFixed(1) : '—';
+        const pct = ((numTargets - 1) * SEEDS_PER_CONFIG + s + 1) / (totalConfigs * SEEDS_PER_CONFIG) * 100;
+        progEl.style.width = pct.toFixed(1) + '%';
+        await sleep(0);
+      }
+    }
+
+    totalPass += pass;
+    totalFail += fail;
+    const statusEl = document.getElementById('status-' + numTargets);
+    if (fail === 0) {
+      statusEl.textContent = '✓ PASS';
+      statusEl.className = 'pass';
+    } else {
+      statusEl.textContent = '✗ ' + fail + ' FAIL';
+      statusEl.className = 'fail';
+    }
+
+    log('Config ' + numTargets + ' targets (L' + levelNum + ', maxTubes=' + maxTubesSeen + '): ' +
+        pass + '/' + SEEDS_PER_CONFIG + ' pass, ' +
+        'avg=' + (totalMs / SEEDS_PER_CONFIG).toFixed(2) + 'ms, ' +
+        'slowest=' + slowest.toFixed(2) + 'ms');
+  }
+
+  const totalSeeds = totalConfigs * SEEDS_PER_CONFIG;
+  tfoot.innerHTML =
+    '<tr>' +
+      '<td colspan="3">TOTAL (1–10 targets)</td>' +
+      '<td>' + totalSeeds + '</td>' +
+      '<td class="pass">' + totalPass + '</td>' +
+      '<td class="fail">' + totalFail + '</td>' +
+      '<td>' + (globalTotalMs / totalSeeds).toFixed(2) + '</td>' +
+      '<td class="' + (globalSlowest > 150 ? 'fail' : '') + '">' + globalSlowest.toFixed(2) + '</td>' +
+      '<td>—</td>' +
+      '<td class="' + (totalFail === 0 && rulesOk ? 'pass' : 'fail') + '">' +
+        (totalFail === 0 && rulesOk ? '✓ ALL PASS' : '✗ FAIL') +
+      '</td>' +
+    '</tr>';
+
+  progEl.style.width = '100%';
+  const allOk = rulesOk && totalFail === 0;
+  sumEl.className = 'banner ' + (allOk ? 'ok' : 'bad');
+  sumEl.textContent = (allOk ? '✓ ' : '✗ ') +
+    totalPass + '/' + totalSeeds + ' seeds passed replay validation · ' +
+    'Slowest generation: ' + globalSlowest.toFixed(2) + ' ms ' +
+    '(target < 150 ms on phone)';
+
+  log('\n=== TOTAL: ' + totalPass + ' pass, ' + totalFail + ' fail, slowest=' + globalSlowest.toFixed(2) + ' ms ===');
+  btn.disabled = false;
+}
+
+window.addEventListener('load', () => { runTests(); });
+</script>
+</body>
+</html>
