@@ -15,30 +15,25 @@
     <div class="home-content">
       <h1 class="home-title">Hue<br>Pour</h1>
       <p class="home-subtitle">Mix · Pour · Solve</p>
-
       <div class="home-level-info" id="home-level-info">Level 1</div>
-
       <button id="btn-play" class="btn-big" aria-label="Play">▶ Play</button>
-
-      <button id="btn-daily" class="btn-daily" aria-label="Daily Puzzle">
-        📅 Daily Puzzle
-      </button>
+      <button id="btn-daily" class="btn-daily" aria-label="Daily Puzzle">📅 Daily Puzzle</button>
       <div id="home-streak" class="streak-badge hidden">🔥 <span id="streak-num">0</span> day streak</div>
-
       <div class="code-entry-row">
         <input id="code-input" type="text" placeholder="HP-XXXX" maxlength="16"
                aria-label="Challenge code" autocomplete="off" autocapitalize="characters" spellcheck="false">
         <button id="btn-code-go" class="btn-sm" aria-label="Load challenge">Go</button>
       </div>
-
       <button id="btn-home-settings" class="btn-icon-row" aria-label="Settings">⚙ Settings</button>
     </div>
   </div>
 
   <!-- ===== GAME SCREEN ===== -->
   <div id="app" class="hidden">
-    <div class="game-column">
+    <!-- full-viewport animation overlay — fixed, above tubes -->
+    <canvas id="anim-overlay"></canvas>
 
+    <div class="game-column">
       <!-- HUD -->
       <header id="hud">
         <div class="hud-row">
@@ -48,10 +43,10 @@
           <span id="hud-par">Par: —</span>
         </div>
         <div class="hud-row hud-buttons">
-          <button id="btn-undo" class="hud-btn" aria-label="Undo">↩ Undo <span id="undo-count">(3)</span></button>
-          <button id="btn-hint" class="hud-btn" aria-label="Hint">💡 Hint</button>
+          <button id="btn-undo"    class="hud-btn" aria-label="Undo">↩ Undo <span id="undo-count">(3)</span></button>
+          <button id="btn-hint"    class="hud-btn" aria-label="Hint">💡 Hint</button>
           <button id="btn-restart" class="hud-btn" aria-label="Restart">⟳</button>
-          <button id="btn-settings" class="hud-btn" aria-label="Settings">⚙</button>
+          <button id="btn-settings"class="hud-btn" aria-label="Settings">⚙</button>
         </div>
       </header>
 
@@ -61,19 +56,15 @@
         <div id="target-tubes"></div>
       </section>
 
-      <!-- TUBE AREA -->
+      <!-- TUBE PLAY AREA -->
       <main id="tube-area"></main>
 
-      <!-- TUTORIAL HINT (floating at the bottom) -->
+      <!-- TUTORIAL HINT -->
       <div id="tutorial-bar" class="hidden" role="status">
         <p id="tutorial-text"></p>
         <button id="btn-skip-tutorial" class="btn-sm">Skip</button>
       </div>
-
-    </div><!-- .game-column -->
-
-    <!-- Animation overlay canvas (full viewport, above tubes) -->
-    <canvas id="anim-overlay"></canvas>
+    </div>
   </div>
 
   <!-- ===== WIN OVERLAY ===== -->
@@ -85,7 +76,7 @@
       <div id="win-code-box" class="code-box"></div>
       <div class="btn-row">
         <button id="btn-share-result" class="btn-secondary-sm">📤 Share</button>
-        <button id="btn-share-card" class="btn-secondary-sm">🖼️ Card</button>
+        <button id="btn-share-card"   class="btn-secondary-sm">🖼️ Card</button>
       </div>
       <button id="btn-next" class="btn-big">Next Level ▶</button>
       <button id="btn-remove-ads-win" class="btn-link hidden">Remove Ads</button>
@@ -101,7 +92,7 @@
       <p id="daily-streak-line" class="streak-badge-inline"></p>
       <p id="daily-countdown-line" class="countdown-text"></p>
       <div class="btn-row">
-        <button id="btn-daily-share" class="btn-secondary-sm">📤 Share</button>
+        <button id="btn-daily-share"      class="btn-secondary-sm">📤 Share</button>
         <button id="btn-daily-share-card" class="btn-secondary-sm">🖼️ Card</button>
       </div>
       <button id="btn-daily-home" class="btn-big">Home</button>
@@ -113,7 +104,7 @@
     <div class="overlay-card share-card-box">
       <canvas id="share-canvas" width="1080" height="1920"></canvas>
       <div class="btn-row">
-        <button id="btn-save-image" class="btn-secondary-sm">💾 Save</button>
+        <button id="btn-save-image"  class="btn-secondary-sm">💾 Save</button>
         <button id="btn-share-image" class="btn-secondary-sm">📤 Share</button>
         <button id="btn-close-share" class="btn-secondary-sm">Close</button>
       </div>
@@ -144,17 +135,21 @@
         <input type="checkbox" id="set-reduce">
         <span class="toggle"></span>
       </label>
+      <div class="setting-row vol-row">
+        <span>Volume</span>
+        <input type="range" id="vol-slider" min="0" max="1" step="0.05" value="0.65"
+               class="vol-slider" aria-label="Master volume">
+      </div>
       <div class="settings-divider"></div>
-      <button id="btn-remove-ads" class="btn-secondary-sm full-w">Remove Ads — $1.99</button>
-      <button id="btn-restore" class="btn-link">Restore Purchases</button>
-      <button id="btn-close-settings" class="btn-secondary-sm full-w">Close</button>
+      <button id="btn-remove-ads"      class="btn-secondary-sm full-w">Remove Ads — $1.99</button>
+      <button id="btn-restore"         class="btn-link">Restore Purchases</button>
+      <button id="btn-close-settings"  class="btn-secondary-sm full-w">Close</button>
     </div>
   </div>
 
   <!-- ===== TOAST ===== -->
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
-  <!-- Scripts: game logic → monetization → UI -->
   <script src="game.js"></script>
   <script src="monetization.js"></script>
   <script src="ui.js"></script>
