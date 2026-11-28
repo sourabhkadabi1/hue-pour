@@ -9,7 +9,13 @@
 /* ===================================================================
    COLOR HELPERS  — single source of truth from game.js COLOR_INFO
    =================================================================== */
-function _hex(c) { return COLOR_INFO[c].hex; }
+function _hex(c) {
+  const base = COLOR_INFO[c] ? COLOR_INFO[c].hex : '#ffffff';
+  if (typeof Economy !== 'undefined' && Economy.getDisplayHex) {
+    return Economy.getDisplayHex(c, base);
+  }
+  return base;
+}
 
 function _hexToRgb(h) {
   return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
@@ -54,61 +60,140 @@ const Sound = (() => {
     o.connect(g); g.connect(dst()); o.start(t); o.stop(t + dur + 0.01);
   }
 
-  // ---- Pour sound: bandpass noise + glug LFO + plip bubbles ----
+  // ---- Liquid Pour Synthesis: pink fluid stream + rising bottle cavity resonance + Minnaert bubbles ----
   let pourNodes = null;
+  let _pinkNoiseBuf = null;
+  let _pourDropTimer = null;
+  let _curFillFrac = 0.2;
+
+  function _getFluidNoiseBuffer() {
+    if (_pinkNoiseBuf && _pinkNoiseBuf.sampleRate === actx.sampleRate) return _pinkNoiseBuf;
+    const len = actx.sampleRate * 2;
+    const buf = actx.createBuffer(1, len, actx.sampleRate);
+    const out = buf.getChannelData(0);
+    // Paul Kellet pink-noise approximation for smooth water turbulence (no white-noise hiss)
+    let b0 = 0, b1 = 0, b2 = 0;
+    for (let i = 0; i < len; i++) {
+      const white = Math.random() * 2 - 1;
+      b0 = 0.99765 * b0 + white * 0.0990460;
+      b1 = 0.96300 * b1 + white * 0.2965164;
+      b2 = 0.57000 * b2 + white * 1.0526913;
+      out[i] = Math.max(-1, Math.min(1, (b0 + b1 + b2 + white * 0.1848) * 0.16));
+    }
+    _pinkNoiseBuf = buf;
+    return buf;
+  }
+
+  function _cavityFreqForFill(fillFrac) {
+    const f = Math.max(0, Math.min(1, Number(fillFrac) || 0));
+    return 320 + f * 760;
+  }
+
+  function _waterBloop(baseFreq, dur, gainPeak) {
+    if (!enabled || !actx) return;
+    const t = actx.currentTime;
+    const o = actx.createOscillator();
+    const g = actx.createGain();
+    const f0 = Math.max(240, baseFreq);
+    o.type = 'sine';
+    o.frequency.setValueAtTime(f0, t);
+    // Upward Minnaert bubble chirp (characteristic liquid/water acoustic signature)
+    o.frequency.exponentialRampToValueAtTime(f0 * (1.45 + Math.random() * 0.35), t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(gainPeak || 0.06, t + dur * 0.22);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(dst());
+    o.start(t); o.stop(t + dur + 0.015);
+  }
+
+  function _scheduleDroplet() {
+    if (!pourNodes || !enabled) { _pourDropTimer = null; return; }
+    const base = _cavityFreqForFill(_curFillFrac) * (0.85 + Math.random() * 0.65);
+    _waterBloop(base, 0.024 + Math.random() * 0.022, 0.032 + Math.random() * 0.030);
+    if (Math.random() < 0.35) {
+      _waterBloop(base * (1.2 + Math.random() * 0.4), 0.018 + Math.random() * 0.014, 0.022);
+    }
+    const nextDelay = 38 + Math.random() * 58;
+    _pourDropTimer = setTimeout(_scheduleDroplet, nextDelay);
+  }
 
   function startPour(fillFrac) {
     if (!enabled) return;
     ensure();
     _stopPour(0.02);
     const t = actx.currentTime;
-    const bufLen = actx.sampleRate * 3;
-    const buf = actx.createBuffer(1, bufLen, actx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < bufLen; i++) d[i] = Math.random() * 2 - 1;
+    _curFillFrac = Math.max(0, Math.min(1, Number(fillFrac) || 0));
 
     const src = actx.createBufferSource();
-    src.buffer = buf; src.loop = true;
+    src.buffer = _getFluidNoiseBuffer();
+    src.loop = true;
 
-    const filt = actx.createBiquadFilter();
-    filt.type = 'bandpass';
-    filt.frequency.value = 350 + fillFrac * 650;
-    filt.Q.value = 2.8;
+    // Bottle cavity resonator (pitch climbs naturally as liquid fills tube)
+    const cavity = actx.createBiquadFilter();
+    cavity.type = 'bandpass';
+    cavity.frequency.value = _cavityFreqForFill(_curFillFrac);
+    cavity.Q.value = 5.0;
 
-    // Glug LFO
-    const lfo = actx.createOscillator();
-    lfo.type = 'sine'; lfo.frequency.value = 2 + Math.random() * 5;
-    const lfoG = actx.createGain(); lfoG.gain.value = 180;
-    lfo.connect(lfoG); lfoG.connect(filt.frequency);
+    // Gentle splash stream shimmer
+    const splash = actx.createBiquadFilter();
+    splash.type = 'bandpass';
+    splash.frequency.value = 1850;
+    splash.Q.value = 1.4;
 
-    const g = actx.createGain();
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.08, t + 0.14);
+    const gCavity = actx.createGain();
+    gCavity.gain.setValueAtTime(0.0001, t);
+    gCavity.gain.linearRampToValueAtTime(0.11, t + 0.09);
 
-    src.connect(filt); filt.connect(g); g.connect(dst());
-    src.start(t); lfo.start(t);
-    pourNodes = { src, filt, lfo, lfoG, g };
+    const gSplash = actx.createGain();
+    gSplash.gain.setValueAtTime(0.0001, t);
+    gSplash.gain.linearRampToValueAtTime(0.035, t + 0.08);
+
+    src.connect(cavity); cavity.connect(gCavity); gCavity.connect(dst());
+    src.connect(splash); splash.connect(gSplash); gSplash.connect(dst());
+    src.start(t);
+
+    pourNodes = { src, cavity, splash, gCavity, gSplash };
+    // Initial liquid contact splash droplets + organic bubble stream
+    _waterBloop(420 + _curFillFrac * 240, 0.032, 0.055);
+    _pourDropTimer = setTimeout(_scheduleDroplet, 35);
   }
 
   function updatePourFill(fillFrac) {
-    if (pourNodes) pourNodes.filt.frequency.value = 350 + fillFrac * 650;
+    _curFillFrac = Math.max(0, Math.min(1, Number(fillFrac) || 0));
+    if (!pourNodes) return;
+    const freq = _cavityFreqForFill(_curFillFrac);
+    if (actx && pourNodes.cavity.frequency.setTargetAtTime) {
+      pourNodes.cavity.frequency.setTargetAtTime(freq, actx.currentTime, 0.04);
+    } else {
+      pourNodes.cavity.frequency.value = freq;
+    }
   }
 
   function _stopPour(fadeT) {
+    if (_pourDropTimer) {
+      clearTimeout(_pourDropTimer);
+      _pourDropTimer = null;
+    }
     if (!pourNodes) return;
-    const t = actx.currentTime, ft = fadeT !== undefined ? fadeT : 0.18;
-    pourNodes.g.gain.setValueAtTime(pourNodes.g.gain.value, t);
-    pourNodes.g.gain.linearRampToValueAtTime(0.0001, t + ft);
+    const t = actx.currentTime, ft = fadeT !== undefined ? fadeT : 0.14;
+    if (pourNodes.gCavity) {
+      pourNodes.gCavity.gain.setValueAtTime(pourNodes.gCavity.gain.value || 0.08, t);
+      pourNodes.gCavity.gain.linearRampToValueAtTime(0.0001, t + ft);
+    }
+    if (pourNodes.gSplash) {
+      pourNodes.gSplash.gain.setValueAtTime(pourNodes.gSplash.gain.value || 0.03, t);
+      pourNodes.gSplash.gain.linearRampToValueAtTime(0.0001, t + ft);
+    }
     const pn = pourNodes; pourNodes = null;
     setTimeout(() => {
-      try { pn.src.stop(); pn.lfo.stop(); } catch (e) {}
-    }, (ft + 0.1) * 1000);
+      try { pn.src.stop(); } catch (e) {}
+    }, (ft + 0.08) * 1000);
   }
 
   function bubble() {
     if (!enabled) return;
     ensure();
-    osc(600 + Math.random() * 1500, 0.025 + Math.random() * 0.03, 'sine', 0.03);
+    _waterBloop(480 + Math.random() * 540, 0.026 + Math.random() * 0.020, 0.045);
   }
 
   // ---- Celebration sounds ----
@@ -203,18 +288,24 @@ const Sound = (() => {
       [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => osc(f, 0.35, 'sine', 0.16), i * 150));
     },
 
+    // Clear continuous oscillator drones — zero background hum!
     startAmbience() {
-      if (!enabled || ambOscs) return; ensure();
-      const g = actx.createGain(); g.gain.value = 0.01; g.connect(dst());
-      const o1 = actx.createOscillator(); o1.type = 'sine'; o1.frequency.value = 110;
-      const o2 = actx.createOscillator(); o2.type = 'sine'; o2.frequency.value = 164.81;
-      o1.connect(g); o2.connect(g); o1.start(); o2.start();
-      ambOscs = { o1, o2, g };
+      ambOscs = null;
     },
     stopAmbience() {
       if (!ambOscs) return;
       try { ambOscs.o1.stop(); ambOscs.o2.stop(); } catch (e) {}
       ambOscs = null;
+    },
+
+    _debugState() {
+      return {
+        hasAmbienceHum: !!ambOscs,
+        pourActive:     !!pourNodes,
+        cavityFreq:     pourNodes && pourNodes.cavity ? pourNodes.cavity.frequency.value : 0,
+        dropletsActive: !!_pourDropTimer,
+        fillFrac:       _curFillFrac,
+      };
     },
 
     coin() {
@@ -529,22 +620,292 @@ const Confetti = (() => {
 })();
 
 /* ===================================================================
-   TUBE GEOMETRY — square top, semicircular bottom, thin outline
+   TUBE & BOTTLE GEOMETRY — multiple unlockable vessel shapes
    =================================================================== */
 
+function _activeBottleShape() {
+  if (typeof Economy !== 'undefined' && Economy.getActiveTube) {
+    return Economy.getActiveTube().id || 'classic';
+  }
+  return 'classic';
+}
+
 /**
- * Build tube path.  Origin: (left, top) of bounding box.
- * Square top corners, semicircular bottom (radius = w/2).
+ * Trace closed interior/contour path for any vessel shape inside [left, top, w, h].
+ * Set opts.closedMouth=false for open top pouring mouth, true for liquid clipping.
  */
-function _tubePath(ctx, left, top, w, h) {
+function _vesselPath(ctx, shapeId, left, top, w, h, closedMouth) {
+  const cx = left + w / 2;
   const r = w / 2;
+  const id = shapeId || 'classic';
+
+  if (id === 'nursing') {
+    const mw = w * 0.62, mL = cx - mw / 2, mR = cx + mw / 2;
+    ctx.moveTo(mL, top + h * 0.04);
+    if (closedMouth) ctx.lineTo(mR, top + h * 0.04);
+    else ctx.moveTo(mR, top + h * 0.04);
+    ctx.lineTo(mR, top + h * 0.18);
+    ctx.bezierCurveTo(left + w * 0.98, top + h * 0.25, left + w * 1.02, top + h * 0.42, left + w * 0.92, top + h * 0.56);
+    ctx.bezierCurveTo(left + w * 0.98, top + h * 0.72, left + w * 0.98, top + h * 0.94, left + w * 0.72, top + h);
+    ctx.lineTo(left + w * 0.28, top + h);
+    ctx.bezierCurveTo(left + w * 0.02, top + h * 0.94, left + w * 0.02, top + h * 0.72, left + w * 0.08, top + h * 0.56);
+    ctx.bezierCurveTo(left - w * 0.02, top + h * 0.42, left + w * 0.02, top + h * 0.25, mL, top + h * 0.18);
+    ctx.closePath();
+    return;
+  }
+
+  if (id === 'soda') {
+    const mw = w * 0.50, mL = cx - mw / 2, mR = cx + mw / 2;
+    ctx.moveTo(mL, top);
+    if (closedMouth) ctx.lineTo(mR, top);
+    else ctx.moveTo(mR, top);
+    ctx.lineTo(mR, top + h * 0.16);
+    ctx.quadraticCurveTo(left + w, top + h * 0.30, left + w, top + h * 0.44);
+    ctx.quadraticCurveTo(left + w * 0.90, top + h * 0.62, left + w, top + h * 0.80);
+    ctx.lineTo(left + w, top + h * 0.93);
+    ctx.quadraticCurveTo(left + w, top + h, left + w * 0.80, top + h);
+    ctx.lineTo(left + w * 0.20, top + h);
+    ctx.quadraticCurveTo(left, top + h, left, top + h * 0.93);
+    ctx.lineTo(left, top + h * 0.80);
+    ctx.quadraticCurveTo(left + w * 0.10, top + h * 0.62, left, top + h * 0.44);
+    ctx.quadraticCurveTo(left, top + h * 0.30, mL, top + h * 0.16);
+    ctx.closePath();
+    return;
+  }
+
+  if (id === 'champagne') {
+    const mw = w * 0.44, mL = cx - mw / 2, mR = cx + mw / 2;
+    ctx.moveTo(mL, top);
+    if (closedMouth) ctx.lineTo(mR, top);
+    else ctx.moveTo(mR, top);
+    ctx.lineTo(mR, top + h * 0.22);
+    ctx.bezierCurveTo(left + w * 0.92, top + h * 0.34, left + w, top + h * 0.48, left + w, top + h * 0.60);
+    ctx.lineTo(left + w, top + h * 0.94);
+    ctx.quadraticCurveTo(left + w, top + h, left + w * 0.82, top + h);
+    ctx.lineTo(left + w * 0.18, top + h);
+    ctx.quadraticCurveTo(left, top + h, left, top + h * 0.94);
+    ctx.lineTo(left, top + h * 0.60);
+    ctx.bezierCurveTo(left, top + h * 0.48, left + w * 0.08, top + h * 0.34, mL, top + h * 0.22);
+    ctx.closePath();
+    return;
+  }
+
+  if (id === 'vase') {
+    const mw = w * 0.72, mL = cx - mw / 2, mR = cx + mw / 2;
+    ctx.moveTo(mL, top);
+    if (closedMouth) ctx.lineTo(mR, top);
+    else ctx.moveTo(mR, top);
+    ctx.quadraticCurveTo(left + w * 0.76, top + h * 0.18, left + w * 0.78, top + h * 0.28);
+    ctx.bezierCurveTo(left + w * 1.06, top + h * 0.50, left + w * 1.02, top + h * 0.84, left + w * 0.76, top + h);
+    ctx.lineTo(left + w * 0.24, top + h);
+    ctx.bezierCurveTo(left - w * 0.02, top + h * 0.84, left - w * 0.06, top + h * 0.50, left + w * 0.22, top + h * 0.28);
+    ctx.quadraticCurveTo(left + w * 0.24, top + h * 0.18, mL, top);
+    ctx.closePath();
+    return;
+  }
+
+  if (id === 'cocktail') {
+    const bowlB = top + h * 0.72;
+    ctx.moveTo(left + w * 0.06, top);
+    if (closedMouth) ctx.lineTo(left + w * 0.94, top);
+    else ctx.moveTo(left + w * 0.94, top);
+    ctx.bezierCurveTo(left + w, top + h * 0.38, left + w * 0.84, bowlB, cx + w * 0.10, bowlB);
+    if (closedMouth) {
+      ctx.lineTo(cx - w * 0.10, bowlB);
+    } else {
+      ctx.lineTo(cx + w * 0.08, top + h * 0.94);
+      ctx.lineTo(cx + w * 0.40, top + h);
+      ctx.lineTo(cx - w * 0.40, top + h);
+      ctx.lineTo(cx - w * 0.08, top + h * 0.94);
+      ctx.lineTo(cx - w * 0.10, bowlB);
+    }
+    ctx.bezierCurveTo(left + w * 0.16, bowlB, left, top + h * 0.38, left + w * 0.06, top);
+    ctx.closePath();
+    return;
+  }
+
+  if (id === 'cork') {
+    const mw = w * 0.58, mL = cx - mw / 2, mR = cx + mw / 2;
+    ctx.moveTo(mL, top + h * 0.06);
+    if (closedMouth) ctx.lineTo(mR, top + h * 0.06);
+    else ctx.moveTo(mR, top + h * 0.06);
+    ctx.lineTo(mR, top + h * 0.16);
+    ctx.lineTo(left + w * 0.94, top + h * 0.22);
+    ctx.lineTo(left + w * 0.94, top + h * 0.92);
+    ctx.quadraticCurveTo(left + w * 0.94, top + h, left + w * 0.76, top + h);
+    ctx.lineTo(left + w * 0.24, top + h);
+    ctx.quadraticCurveTo(left + w * 0.06, top + h, left + w * 0.06, top + h * 0.92);
+    ctx.lineTo(left + w * 0.06, top + h * 0.22);
+    ctx.lineTo(mL, top + h * 0.16);
+    ctx.closePath();
+    return;
+  }
+
+  if (id === 'pineapple') {
+    const mw = w * 0.56, mL = cx - mw / 2, mR = cx + mw / 2;
+    ctx.moveTo(mL, top + h * 0.08);
+    if (closedMouth) ctx.lineTo(mR, top + h * 0.08);
+    else ctx.moveTo(mR, top + h * 0.08);
+    ctx.lineTo(mR, top + h * 0.20);
+    ctx.lineTo(left + w * 0.98, top + h * 0.36);
+    ctx.lineTo(left + w * 0.98, top + h * 0.88);
+    ctx.lineTo(left + w * 0.78, top + h);
+    ctx.lineTo(left + w * 0.22, top + h);
+    ctx.lineTo(left + w * 0.02, top + h * 0.88);
+    ctx.lineTo(left + w * 0.02, top + h * 0.36);
+    ctx.lineTo(mL, top + h * 0.20);
+    ctx.closePath();
+    return;
+  }
+
+  if (id === 'mushroom') {
+    const mw = w * 0.50, mL = cx - mw / 2, mR = cx + mw / 2;
+    ctx.moveTo(mL, top + h * 0.12);
+    if (closedMouth) ctx.lineTo(mR, top + h * 0.12);
+    else ctx.moveTo(mR, top + h * 0.12);
+    ctx.lineTo(mR, top + h * 0.28);
+    ctx.bezierCurveTo(left + w * 1.06, top + h * 0.38, left + w * 1.04, top + h * 0.94, left + w * 0.74, top + h);
+    ctx.lineTo(left + w * 0.26, top + h);
+    ctx.bezierCurveTo(left - w * 0.04, top + h * 0.94, left - w * 0.06, top + h * 0.38, mL, top + h * 0.28);
+    ctx.closePath();
+    return;
+  }
+
+  if (id === 'winter') {
+    const mw = w * 0.54, mL = cx - mw / 2, mR = cx + mw / 2;
+    ctx.moveTo(mL, top + h * 0.08);
+    if (closedMouth) ctx.lineTo(mR, top + h * 0.08);
+    else ctx.moveTo(mR, top + h * 0.08);
+    ctx.lineTo(mR, top + h * 0.22);
+    ctx.bezierCurveTo(left + w * 0.96, top + h * 0.30, left + w, top + h * 0.56, left + w * 0.96, top + h * 0.90);
+    ctx.quadraticCurveTo(left + w * 0.92, top + h, cx, top + h);
+    ctx.quadraticCurveTo(left + w * 0.08, top + h, left + w * 0.04, top + h * 0.90);
+    ctx.bezierCurveTo(left, top + h * 0.56, left + w * 0.04, top + h * 0.30, mL, top + h * 0.22);
+    ctx.closePath();
+    return;
+  }
+
+  // Default: Classic Test Tube
   ctx.moveTo(left, top);
-  ctx.lineTo(left + w, top);
+  if (closedMouth) ctx.lineTo(left + w, top);
+  else ctx.moveTo(left + w, top);
   ctx.lineTo(left + w, top + h - r);
   ctx.arcTo(left + w, top + h, left + w / 2, top + h, r);
   ctx.arcTo(left, top + h, left, top + h - r, r);
   ctx.lineTo(left, top);
-  ctx.closePath();
+  if (closedMouth) ctx.closePath();
+}
+
+function _strokeOpenVessel(ctx, shapeId, left, top, w, h) {
+  const id = shapeId || 'classic';
+  if (id === 'classic') {
+    const r = w / 2;
+    ctx.beginPath();
+    ctx.moveTo(left, top);
+    ctx.lineTo(left, top + h - r);
+    ctx.arcTo(left, top + h, left + r, top + h, r);
+    ctx.arcTo(left + w, top + h, left + w, top + h - r, r);
+    ctx.lineTo(left + w, top);
+    ctx.stroke();
+    return;
+  }
+  ctx.beginPath();
+  _vesselPath(ctx, id, left, top, w, h, true);
+  ctx.stroke();
+}
+
+function _drawVesselAccents(ctx, shapeId, left, top, w, h, opts) {
+  const id = shapeId || 'classic';
+  const cx = left + w / 2;
+  if (id === 'classic') {
+    // Classic glass highlight strip
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.fillRect(left + w * 0.14, top + h * 0.06, Math.max(1.5, w * 0.08), h * 0.78);
+    return;
+  }
+  ctx.save();
+  if (id === 'nursing') {
+    ctx.strokeStyle = 'rgba(77, 208, 225, 0.85)';
+    ctx.lineWidth = Math.max(1.5, w * 0.055);
+    ctx.beginPath();
+    ctx.moveTo(cx - w * 0.34, top + h * 0.16);
+    ctx.lineTo(cx + w * 0.34, top + h * 0.16);
+    ctx.stroke();
+    if (opts && opts.shopPreview) {
+      ctx.fillStyle = '#4dd0e1';
+      ctx.beginPath();
+      ctx.ellipse(cx, top + h * 0.02, w * 0.18, h * 0.05, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (id === 'soda') {
+    ctx.fillStyle = '#ef5350';
+    ctx.fillRect(cx - w * 0.28, top - h * 0.01, w * 0.56, Math.max(3, h * 0.04));
+  } else if (id === 'champagne') {
+    ctx.fillStyle = '#f06292';
+    ctx.fillRect(cx - w * 0.25, top + h * 0.19, w * 0.50, Math.max(3, h * 0.045));
+    ctx.beginPath();
+    ctx.moveTo(cx - w * 0.20, top + h * 0.22);
+    ctx.lineTo(cx - w * 0.28, top + h * 0.32);
+    ctx.lineTo(cx - w * 0.08, top + h * 0.26);
+    ctx.closePath(); ctx.fill();
+  } else if (id === 'vase' && opts && opts.shopPreview) {
+    ctx.strokeStyle = '#66bb6a'; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(cx + w * 0.12, top + h * 0.06); ctx.lineTo(cx + w * 0.18, top - h * 0.04); ctx.stroke();
+    ctx.fillStyle = '#ba68c8';
+    ctx.beginPath(); ctx.arc(cx + w * 0.18, top - h * 0.05, Math.max(3, w * 0.11), 0, Math.PI * 2); ctx.fill();
+  } else if (id === 'cocktail') {
+    ctx.strokeStyle = '#ffca28'; ctx.lineWidth = Math.max(1.5, w * 0.045);
+    ctx.beginPath();
+    ctx.moveTo(cx + w * 0.18, top + h * 0.38);
+    ctx.lineTo(cx + w * 0.34, top - h * 0.02);
+    ctx.stroke();
+    if (opts && opts.shopPreview) {
+      ctx.fillStyle = '#66bb6a';
+      ctx.beginPath(); ctx.arc(cx + w * 0.34, top + h * 0.01, Math.max(3, w * 0.12), Math.PI, 0); ctx.fill();
+    }
+  } else if (id === 'cork') {
+    ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.lineWidth = Math.max(1.5, w * 0.045);
+    ctx.beginPath();
+    ctx.moveTo(cx - w * 0.32, top + h * 0.15);
+    ctx.lineTo(cx + w * 0.32, top + h * 0.15);
+    ctx.stroke();
+    if (opts && opts.shopPreview) {
+      ctx.fillStyle = '#8d6e63';
+      ctx.fillRect(cx - w * 0.20, top, w * 0.40, h * 0.09);
+    }
+  } else if (id === 'pineapple') {
+    ctx.strokeStyle = 'rgba(255, 183, 77, 0.35)'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(left + w * 0.18, top + h * 0.42); ctx.lineTo(left + w * 0.82, top + h * 0.80);
+    ctx.moveTo(left + w * 0.82, top + h * 0.42); ctx.lineTo(left + w * 0.18, top + h * 0.80);
+    ctx.stroke();
+    if (opts && opts.shopPreview) {
+      ctx.fillStyle = '#66bb6a';
+      ctx.beginPath();
+      ctx.moveTo(cx, top - h * 0.02);
+      ctx.lineTo(cx - w * 0.18, top + h * 0.09);
+      ctx.lineTo(cx + w * 0.18, top + h * 0.09);
+      ctx.closePath(); ctx.fill();
+    }
+  } else if (id === 'mushroom' && opts && opts.shopPreview) {
+    ctx.fillStyle = '#e53935';
+    ctx.beginPath();
+    ctx.arc(cx, top + h * 0.12, w * 0.32, Math.PI, 0);
+    ctx.fill();
+  } else if (id === 'winter' && opts && opts.shopPreview) {
+    ctx.fillStyle = '#4fc3f7';
+    ctx.beginPath();
+    ctx.arc(cx, top + h * 0.08, w * 0.26, Math.PI, 0);
+    ctx.fill();
+  }
+  // Specular gleam for all bottles
+  ctx.fillStyle = 'rgba(255,255,255,0.16)';
+  ctx.fillRect(left + w * 0.18, top + h * 0.32, Math.max(1.2, w * 0.06), h * 0.45);
+  ctx.restore();
+}
+
+function _tubePath(ctx, left, top, w, h) {
+  _vesselPath(ctx, _activeBottleShape(), left, top, w, h, true);
 }
 
 /** Group consecutive same-colour units into bands (bottom-to-top). */
@@ -574,6 +935,7 @@ function _bands(tube) {
    =================================================================== */
 function drawTubeOnCtx(ctx, cx, cy, w, h, angle, bands, waveState, opts) {
   opts = opts || {};
+  const shapeId = opts.shapeId || _activeBottleShape();
   const left = cx - w / 2;
   const top  = cy - h;
   const strokeW = w * 0.055;
@@ -582,27 +944,28 @@ function drawTubeOnCtx(ctx, cx, cy, w, h, angle, bands, waveState, opts) {
   const iTop  = top + strokeW / 2;
   const iW    = w - strokeW;
   const iH    = h - strokeW / 2;
-  const unitH = iH * 0.22;   // each unit = 22% of inner height
-  const r = w / 2;
+  const isStemmed = shapeId === 'cocktail';
+  const unitH = isStemmed ? iH * 0.155 : iH * 0.22;   // keep cocktail bowl crisp
+  const fillBottomY = isStemmed ? (top + h * 0.72) : cy;
 
   // ══ OUTER SAVE – apply tube rotation ═══════════════════════════
   ctx.save();
   ctx.translate(cx, cy); ctx.rotate(angle); ctx.translate(-cx, -cy);
 
-  // ══ INNER SAVE – clip tube interior, then counter-rotate for liquid ═══
+  // ══ INNER SAVE – clip vessel interior, then counter-rotate for liquid ═══
   const totalUnits = bands.reduce((s, b) => s + b.units, 0);
   if (totalUnits > 0) {
     ctx.save();
-    // Clip to tube interior
+    // Clip to vessel interior
     ctx.beginPath();
-    _tubePath(ctx, iLeft, iTop, iW, iH);
+    _vesselPath(ctx, shapeId, iLeft, iTop, iW, iH, true);
     ctx.clip();
 
-    // Counter-rotate: now in WORLD space, still clipped to tilted tube
+    // Counter-rotate: now in WORLD space, still clipped to tilted vessel
     ctx.translate(cx, cy); ctx.rotate(-angle); ctx.translate(-cx, -cy);
 
     // Draw liquid bands (horizontal rectangles in world space)
-    let curY = cy;
+    let curY = fillBottomY;
     for (let i = 0; i < bands.length; i++) {
       const band = bands[i];
       const bh   = band.units * unitH;
@@ -664,7 +1027,7 @@ function drawTubeOnCtx(ctx, cx, cy, w, h, angle, bands, waveState, opts) {
     ctx.restore(); // end clip
   }
 
-  // ── Glass outline (thin #CFCFCF, square top, semicircular bottom) ──
+  // ── Glass outline & subtle vessel decor ──
   if (!opts.noGlass) {
     const glassColor =
       opts.selected  ? 'rgba(79,195,247,0.95)'  :
@@ -676,14 +1039,8 @@ function drawTubeOnCtx(ctx, cx, cy, w, h, angle, bands, waveState, opts) {
     ctx.lineWidth = opts.selected ? strokeW * 1.5 : strokeW;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    // Draw open-mouth tube: sides + bottom, NO top line
-    ctx.beginPath();
-    ctx.moveTo(left, top);
-    ctx.lineTo(left, top + h - r);
-    ctx.arcTo(left, top + h, left + r, top + h, r);
-    ctx.arcTo(left + w, top + h, left + w, top + h - r, r);
-    ctx.lineTo(left + w, top);
-    ctx.stroke();
+    _strokeOpenVessel(ctx, shapeId, left, top, w, h);
+    _drawVesselAccents(ctx, shapeId, left, top, w, h, opts);
   }
 
   ctx.restore(); // end rotation
@@ -1308,8 +1665,7 @@ function _buildTubeDOM(policy) {
   _plusEl = null;
 
   const realCount = _st.tubes.length;
-  const showPlus = !!(policy && policy.hasPlusSlot);
-  const slots = realCount + (showPlus ? 1 : 0);
+  const slots = realCount;
   const rows = slots <= 7 ? 1 : 2;
   const row1Limit = rows === 1 ? slots : Math.ceil(slots / 2);
 
@@ -1339,14 +1695,8 @@ function _buildTubeDOM(policy) {
     _tubeEls.push({ wrapper, canvas, ctx });
   });
 
-  if (showPlus) {
-    _plusEl = _buildPlusSlotEl();
-    const plusParent = realCount < row1Limit ? row1 : row2;
-    plusParent.appendChild(_plusEl.wrapper);
-  }
-
   _renderedSlots = slots;
-  _hasRenderedPlus = showPlus;
+  _hasRenderedPlus = false;
 }
 
 function _applyFlipReflow(prevRects, popIdx) {
@@ -1461,11 +1811,12 @@ function _startPourAnim(si, di, moveResult) {
   const srcLipOrigX = srcCx + tiltDir * _tubeW / 2;
   const srcLipOrigY = srcCy - _tubeH;
 
-  // Compute timing
+  // Compute timing scaled by Settings Speed (x1 / x2 / x3) & debug ?slowmo
   const units = moveResult.units;
-  const P1_DUR = 450; // travel + tilt
-  const P2_DUR = 600 + units * 100; // pour
-  const P3_DUR = 400; // return
+  const speedDiv = _speedScale();
+  const P1_DUR = Math.round(450 / speedDiv); // travel + tilt
+  const P2_DUR = Math.round((600 + units * 100) / speedDiv); // pour
+  const P3_DUR = Math.round(400 / speedDiv); // return
 
   // Hide source canvas
   srcEl.canvas.style.visibility = 'hidden';
@@ -1545,7 +1896,10 @@ let _st = {
   _levelConfig:     null,
 };
 
-let _settings = { sound: true, haptics: true, colorblind: false, reduceEffects: false, volume: 0.65 };
+let _settings = { sound: true, haptics: true, colorblind: false, reduceEffects: false, volume: 0.65, speed: 1 };
+function _speedScale() {
+  return _settings.speed === 3 ? 2.4 : (_settings.speed === 2 ? 1.65 : 1.0);
+}
 let _best = {}, _daily = { streak: 0, lastDate: '', results: {} }, _tutDone = {};
 
 const $ = id => document.getElementById(id);
@@ -1561,6 +1915,13 @@ const dom = {
   codeInput:        $('code-input'),
   btnCodeGo:        $('btn-code-go'),
   btnHomeSettings:  $('btn-home-settings'),
+  btnHomeRemoveAds: $('btn-home-remove-ads'),
+  btnHomeModes:     $('btn-home-modes'),
+  homeDailyCaption: $('home-daily-caption'),
+  homeSceneCanvas:  $('home-scene-canvas'),
+  modesOverlay:     $('modes-overlay'),
+  btnCloseModes:    $('btn-close-modes'),
+  btnModesDaily:    $('btn-modes-daily'),
   tubeArea:         $('tube-area'),
   targetTubes:      $('target-tubes'),
   hudLevel:         $('hud-level'),
@@ -1578,6 +1939,13 @@ const dom = {
   btnBack:          $('btn-back'),
   btnUndo:          $('btn-undo'),
   btnHint:          $('btn-hint'),
+  btnAddTube:       $('btn-add-tube'),
+  addTubeBadge:     $('add-tube-badge'),
+  addTubeLeft:      $('add-tube-left'),
+  topAddSlot0:      $('top-add-slot-0'),
+  topAddBadge0:     $('top-add-badge-0'),
+  topAddSlot1:      $('top-add-slot-1'),
+  topAddBadge1:     $('top-add-badge-1'),
   btnRestart:       $('btn-restart'),
   btnSettings:      $('btn-settings'),
   tutorialBar:      $('tutorial-bar'),
@@ -1612,6 +1980,10 @@ const dom = {
   btnRemoveAds:     $('btn-remove-ads'),
   btnRestore:       $('btn-restore'),
   btnCloseSettings: $('btn-close-settings'),
+  btnSettingsHome:  $('btn-settings-home'),
+  btnSpeed1:        $('btn-speed-1'),
+  btnSpeed2:        $('btn-speed-2'),
+  btnSpeed3:        $('btn-speed-3'),
   cheerText:        $('cheer-text'),
   comboFlash:       $('combo-flash'),
   progressText:     $('progress-text'),
@@ -1623,12 +1995,31 @@ const dom = {
   winCoinsRow:      $('win-coins-row'),
   winCoinsText:     $('win-coins-text'),
   btnWinDoubleCoins:$('btn-win-double-coins'),
+  winUnlockTubeRow: $('win-unlock-tube-row'),
+  winUnlockTubeLabel: $('win-unlock-tube-label'),
+  winUnlockTubeFill:  $('win-unlock-tube-fill'),
+  winUnlockTubeFrac:  $('win-unlock-tube-frac'),
+  winUnlockTubeCard:  $('win-unlock-tube-card'),
+  winUnlockTubeCanvas:$('win-unlock-tube-canvas'),
+  winUnlockTubeNew:   $('win-unlock-tube-new'),
+  winUnlockThemeRow:  $('win-unlock-theme-row'),
+  winUnlockThemeLabel:$('win-unlock-theme-label'),
+  winUnlockThemeFill: $('win-unlock-theme-fill'),
+  winUnlockThemeFrac: $('win-unlock-theme-frac'),
+  winUnlockThemeCard: $('win-unlock-theme-card'),
+  winUnlockThemeCanvas:$('win-unlock-theme-canvas'),
+  winUnlockThemeNew:  $('win-unlock-theme-new'),
   dailyCoinsRow:    $('daily-coins-row'),
   dailyCoinsText:   $('daily-coins-text'),
   btnDailyDoubleCoins: $('btn-daily-double-coins'),
   shopOverlay:      $('shop-overlay'),
+  shopTitle:        $('shop-title'),
   shopWallet:       $('shop-wallet'),
   shopCoinsNum:     $('shop-coins-num'),
+  shopGrid:         $('shop-grid'),
+  tabTube:          $('tab-tube'),
+  tabTheme:         $('tab-theme'),
+  tabColor:         $('tab-color'),
   btnShopFreeCoins: $('btn-shop-free-coins'),
   shopAdMeta:       $('shop-ad-meta'),
   shopPalettesList: $('shop-palettes-list'),
@@ -1649,20 +2040,33 @@ function _init() {
   _initBg();
   _updateProgress();
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { _stopAdCooldownTimer(); }
-    else { _updateRewardedAdButtons(); }
+    if (document.hidden) {
+      _stopAdCooldownTimer();
+      _stopHomeScene();
+    } else {
+      _updateRewardedAdButtons();
+      if (_st.mode === 'home') _startHomeScene();
+    }
   });
   window.addEventListener('resize', () => {
     _initOverlay();
     _initBg();
-    if (_st.mode !== 'home' && !_st.animating) _renderTubesAll();
+    if (_st.mode === 'home') _renderHomeSceneFrame(performance.now());
+    else if (!_st.animating) _renderTubesAll();
   });
   if (_st._jumpLevel) _startLevel(_st._jumpLevel);
 }
 
 function _parseURL() {
   const p = new URLSearchParams(window.location.search);
-  if (p.has('level')) { const n=parseInt(p.get('level'),10); if(n>0){_st.levelNum=n;_st._jumpLevel=n;} }
+  if (p.has('level')) {
+    const n = parseInt(p.get('level'), 10);
+    if (n > 0) {
+      _st.levelNum = n;
+      _st._jumpLevel = n;
+      if (typeof Economy !== 'undefined' && Economy.setHighestLevel) Economy.setHighestLevel(n);
+    }
+  }
   if (p.has('seed')) _st._forcedSeed = parseInt(p.get('seed'),10);
   if (p.has('slowmo')) _slowmo = parseFloat(p.get('slowmo')) || 1.0;
   if (p.has('coins')) {
@@ -1719,6 +2123,9 @@ function _loadSave() {
   if (d.daily)            _daily = { ..._daily, ...d.daily };
   if (d.tutorialDone)     _tutDone = d.tutorialDone;
   if (d.levelsCompleted)  _st.levelsCompleted = d.levelsCompleted;
+  if (typeof Economy !== 'undefined' && Economy.setHighestLevel) {
+    Economy.setHighestLevel(Math.max(1, _st.levelNum || 1));
+  }
 }
 
 function _persist() {
@@ -1740,23 +2147,39 @@ function _applySettings() {
   dom.setColorblind.checked = _settings.colorblind;
   dom.setReduce.checked     = _settings.reduceEffects;
   dom.volSlider.value       = _settings.volume;
+  const spd = _settings.speed === 3 ? 3 : (_settings.speed === 2 ? 2 : 1);
+  _settings.speed = spd;
+  if (dom.btnSpeed1) dom.btnSpeed1.classList.toggle('is-active', spd === 1);
+  if (dom.btnSpeed2) dom.btnSpeed2.classList.toggle('is-active', spd === 2);
+  if (dom.btnSpeed3) dom.btnSpeed3.classList.toggle('is-active', spd === 3);
   if (Monetization.isAdsRemoved()) {
     dom.btnRemoveAds.textContent = 'Ads Removed ✓';
     dom.btnRemoveAds.disabled = true;
     dom.btnRemoveAdsWin.classList.add('hidden');
+    if (dom.btnHomeRemoveAds) dom.btnHomeRemoveAds.classList.add('hidden');
+  } else {
+    if (dom.btnHomeRemoveAds) dom.btnHomeRemoveAds.classList.remove('hidden');
   }
+  if (_st.mode === 'home') _startHomeScene();
 }
 
 /* ---- events ---- */
 function _bindEvents() {
   dom.btnPlay.addEventListener('click',         () => { Sound.select(); _startLevel(_st.levelNum); });
   dom.btnDaily.addEventListener('click',        () => { Sound.select(); _startDaily(); });
+  if (dom.btnHomeModes)     dom.btnHomeModes.addEventListener('click',  () => { Sound.select(); _showOverlay(dom.modesOverlay, true); });
+  if (dom.btnCloseModes)    dom.btnCloseModes.addEventListener('click', () => { Sound.select(); _showOverlay(dom.modesOverlay, false); });
+  if (dom.btnModesDaily)    dom.btnModesDaily.addEventListener('click', () => { Sound.select(); _showOverlay(dom.modesOverlay, false); _startDaily(); });
+  if (dom.btnHomeRemoveAds) dom.btnHomeRemoveAds.addEventListener('click', _buyRemoveAds);
   dom.btnCodeGo.addEventListener('click',       () => { Sound.select(); _loadCode(); });
   dom.codeInput.addEventListener('keydown',     e  => { if(e.key==='Enter') _loadCode(); });
   dom.btnHomeSettings.addEventListener('click', () => { Sound.select(); _showOverlay(dom.settingsOverlay, true); });
   dom.btnBack.addEventListener('click',         () => { Sound.select(); _goHome(); });
   dom.btnUndo.addEventListener('click',         _onUndo);
   dom.btnHint.addEventListener('click',         _onHint);
+  if (dom.btnAddTube)  dom.btnAddTube.addEventListener('click',  _onAddPlusTube);
+  if (dom.topAddSlot0) dom.topAddSlot0.addEventListener('click', _onAddPlusTube);
+  if (dom.topAddSlot1) dom.topAddSlot1.addEventListener('click', _onAddPlusTube);
   dom.btnRestart.addEventListener('click',      () => { Sound.select(); _restart(); });
   dom.btnSettings.addEventListener('click',     () => { Sound.select(); _showOverlay(dom.settingsOverlay, true); });
   dom.btnSkipTut.addEventListener('click',      _skipTut);
@@ -1780,9 +2203,28 @@ function _bindEvents() {
     await Monetization.restorePurchases(); _applySettings();
     Toast.show(Monetization.isAdsRemoved() ? 'Purchases restored!' : 'No purchases found');
   });
-  dom.btnCloseSettings.addEventListener('click', () => { _showOverlay(dom.settingsOverlay,false); _persist(); });
-  if (dom.homeWallet)       dom.homeWallet.addEventListener('click', () => { Sound.select(); _openShop(); });
-  if (dom.btnHomeShop)      dom.btnHomeShop.addEventListener('click', () => { Sound.select(); _openShop(); });
+  dom.btnCloseSettings.addEventListener('click', () => { Sound.select(); _showOverlay(dom.settingsOverlay,false); _persist(); });
+  if (dom.btnSettingsHome) {
+    dom.btnSettingsHome.addEventListener('click', () => {
+      Sound.select();
+      _showOverlay(dom.settingsOverlay, false);
+      _goHome();
+    });
+  }
+  [dom.btnSpeed1, dom.btnSpeed2, dom.btnSpeed3].forEach((btn, idx) => {
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      Sound.select();
+      _settings.speed = idx + 1;
+      _applySettings();
+      _persist();
+    });
+  });
+  if (dom.homeWallet)       dom.homeWallet.addEventListener('click', () => { Sound.select(); _openShop('theme'); });
+  if (dom.btnHomeShop)      dom.btnHomeShop.addEventListener('click', () => { Sound.select(); _openShop('theme'); });
+  if (dom.tabTube)          dom.tabTube.addEventListener('click', () => { Sound.select(); _switchShopTab('tube'); });
+  if (dom.tabTheme)         dom.tabTheme.addEventListener('click', () => { Sound.select(); _switchShopTab('theme'); });
+  if (dom.tabColor)         dom.tabColor.addEventListener('click', () => { Sound.select(); _switchShopTab('color'); });
   if (dom.btnCloseShop)     dom.btnCloseShop.addEventListener('click', () => { Sound.select(); _closeShop(); });
   if (dom.btnHomeFreeCoins) dom.btnHomeFreeCoins.addEventListener('click', () => _onWatchFreeCoinsAd(dom.btnHomeFreeCoins));
   if (dom.btnShopFreeCoins) dom.btnShopFreeCoins.addEventListener('click', () => _onWatchFreeCoinsAd(dom.btnShopFreeCoins));
@@ -2029,76 +2471,193 @@ async function _onWatchFreeCoinsAd(originEl) {
   _updateRewardedAdButtons();
 }
 
-function _renderShop() {
-  _refreshWalletUI(false);
-  _updateRewardedAdButtons();
-  if (!dom.shopPalettesList || typeof Economy === 'undefined' || !Economy.getPalettes) return;
-  const pals = Economy.getPalettes();
-  const bal = _getCoinBalance();
-  dom.shopPalettesList.innerHTML = '';
-  for (let i = 0; i < pals.length; i++) {
-    const p = pals[i];
-    const row = document.createElement('div');
-    row.className = 'shop-item' + (p.active ? ' is-active' : '');
+let _shopTab = 'theme';
 
-    const info = document.createElement('div');
-    info.className = 'shop-item-info';
-    const nameEl = document.createElement('div');
-    nameEl.className = 'shop-item-name';
-    nameEl.textContent = p.name;
-    const descEl = document.createElement('div');
-    descEl.className = 'shop-item-desc';
-    descEl.textContent = p.desc;
-    const sw = document.createElement('div');
-    sw.className = 'shop-swatches';
-    for (let j = 0; j < p.swatches.length; j++) {
-      const box = document.createElement('span');
-      box.className = 'shop-swatch';
-      box.style.background = p.swatches[j];
-      sw.appendChild(box);
-    }
-    info.appendChild(nameEl); info.appendChild(descEl); info.appendChild(sw);
+function _switchShopTab(tab) {
+  _shopTab = (tab === 'tube' || tab === 'color') ? tab : 'theme';
+  if (dom.shopTitle) dom.shopTitle.textContent = _shopTab.toUpperCase();
+  if (dom.tabTube)  dom.tabTube.classList.toggle('is-active',  _shopTab === 'tube');
+  if (dom.tabTheme) dom.tabTheme.classList.toggle('is-active', _shopTab === 'theme');
+  if (dom.tabColor) dom.tabColor.classList.toggle('is-active', _shopTab === 'color');
+  _renderShop();
+}
 
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn-shop-action';
-    if (p.active) {
-      btn.classList.add('is-active');
-      btn.textContent = 'Active ✓';
-      btn.disabled = true;
-    } else if (p.owned) {
-      btn.classList.add('is-owned');
-      btn.textContent = 'Equip';
-      btn.addEventListener('click', () => {
-        Sound.select();
-        Economy.selectPalette(p.id);
-        Toast.show('Equipped ' + p.name);
-        _renderShop();
-      });
-    } else {
-      btn.textContent = p.price + ' coins';
-      if (bal < p.price) btn.disabled = true;
-      btn.addEventListener('click', () => {
-        const prev = _getCoinBalance();
-        const res = Economy.buyPalette(p.id);
-        if (!res.ok) {
-          Toast.show('Need ' + p.price + ' coins');
-          return;
-        }
-        Sound.coinSpend();
-        _animateWalletCount(prev, res.balance);
-        _onCoinBalanceChanged();
-        Toast.show('Unlocked ' + p.name + '!');
-        _renderShop();
-      });
+function _makeLockOverlay(labelText, isCoinPrice) {
+  const ov = document.createElement('div');
+  ov.className = 'col-lock-overlay';
+  const lockSvg =
+    '<svg class="col-lock-svg" viewBox="0 0 24 24" width="32" height="32" aria-hidden="true">' +
+      '<path d="M7 11V8a5 5 0 0 1 10 0v3" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>' +
+      '<rect x="5" y="10.5" width="14" height="10.5" rx="2.5" fill="#fff"/>' +
+      '<circle cx="12" cy="15.5" r="1.4" fill="#180b38"/>' +
+    '</svg>';
+  if (isCoinPrice) {
+    ov.innerHTML = lockSvg +
+      '<span class="col-price-pill">' +
+        '<svg class="coin-icon-svg" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">' +
+          '<circle cx="12" cy="12" r="10.5" fill="#ffd54f" stroke="#f57f17" stroke-width="1.6"/>' +
+          '<path d="M12 7.2C13.9 10 15.2 11.7 15.2 13.4a3.2 3.2 0 1 1-6.4 0c0-1.7 1.3-3.4 3.2-6.2z" fill="#e65100"/>' +
+        '</svg>' +
+        '<span>' + labelText + '</span>' +
+      '</span>';
+  } else {
+    ov.innerHTML = lockSvg + '<span class="col-lock-level">' + labelText + '</span>';
+  }
+  return ov;
+}
+
+function _drawCollectionCardThumb(canvas, kind, item) {
+  if (!canvas || !canvas.getContext) return;
+  const W = 150, H = 156;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  if (kind === 'theme') {
+    _paintSceneTheme(ctx, item.id, W, H, true);
+    return;
+  }
+
+  if (kind === 'tube') {
+    const bw = 24, bh = 88, cy = H * 0.80, xs = [34, 75, 116];
+    for (let i = 0; i < xs.length; i++) {
+      ctx.save();
+      ctx.strokeStyle = item.unlocked ? '#dcd7f7' : 'rgba(220,215,247,0.72)';
+      ctx.lineWidth = 1.8;
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      _strokeOpenVessel(ctx, item.id, xs[i] - bw / 2, cy - bh, bw, bh);
+      _drawVesselAccents(ctx, item.id, xs[i] - bw / 2, cy - bh, bw, bh, { shopPreview: true });
+      ctx.restore();
     }
-    row.appendChild(info);
-    row.appendChild(btn);
-    dom.shopPalettesList.appendChild(row);
+    return;
+  }
+
+  if (kind === 'color') {
+    const bw = 24, bh = 88, cy = H * 0.80, xs = [34, 75, 116];
+    const sampleCols = [
+      ['GREEN', 'ORANGE', 'BLUE'],
+      ['PURPLE', 'YELLOW', 'BLUE'],
+      ['VERMILION', 'TEAL', 'RED'],
+    ];
+    for (let i = 0; i < xs.length; i++) {
+      const colNames = sampleCols[i];
+      const bands = [];
+      for (let u = 0; u < colNames.length; u++) {
+        const key = colNames[u];
+        const hex = (item.colors && item.colors[key]) || (COLOR_INFO[key] ? COLOR_INFO[key].hex : '#fff');
+        bands.push({ color: key, units: 1.1, hexOverride: hex });
+      }
+      ctx.save();
+      const left = xs[i] - bw / 2, top = cy - bh, r = bw / 2;
+      ctx.beginPath();
+      _vesselPath(ctx, 'classic', left + 1, top + 1, bw - 2, bh - 1.5, true);
+      ctx.clip();
+      let curY = cy;
+      const uH = bh * 0.27;
+      for (let b = 0; b < bands.length; b++) {
+        ctx.fillStyle = bands[b].hexOverride;
+        ctx.fillRect(left, curY - uH, bw, uH + 0.5);
+        curY -= uH;
+      }
+      ctx.restore();
+      ctx.save();
+      ctx.strokeStyle = '#d4d0ea'; ctx.lineWidth = 1.7;
+      _strokeOpenVessel(ctx, 'classic', left, top, bw, bh);
+      ctx.restore();
+    }
   }
 }
 
-function _openShop() {
+function _renderShop() {
+  _refreshWalletUI(false);
+  _updateRewardedAdButtons();
+  if (!dom.shopGrid || typeof Economy === 'undefined') return;
+  if (dom.shopTitle) dom.shopTitle.textContent = _shopTab.toUpperCase();
+  if (dom.tabTube)  dom.tabTube.classList.toggle('is-active',  _shopTab === 'tube');
+  if (dom.tabTheme) dom.tabTheme.classList.toggle('is-active', _shopTab === 'theme');
+  if (dom.tabColor) dom.tabColor.classList.toggle('is-active', _shopTab === 'color');
+
+  const grid = dom.shopGrid;
+  grid.innerHTML = '';
+
+  const highestLvl = Math.max(_st.levelNum || 1, Economy.getHighestLevel ? Economy.getHighestLevel() : 1);
+  let items = [];
+  if (_shopTab === 'theme') items = Economy.getThemes(highestLvl);
+  else if (_shopTab === 'tube') items = Economy.getTubes(highestLvl);
+  else items = Economy.getPalettes();
+
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'col-card' + (it.active ? ' is-active' : '');
+    card.setAttribute('aria-label', it.name);
+
+    const cvs = document.createElement('canvas');
+    cvs.className = 'col-card-canvas';
+    _drawCollectionCardThumb(cvs, _shopTab, it);
+    card.appendChild(cvs);
+
+    if (it.active) {
+      const chk = document.createElement('span');
+      chk.className = 'col-check-badge';
+      chk.textContent = '✓';
+      card.appendChild(chk);
+    }
+
+    const isUnlocked = _shopTab === 'color' ? !!it.owned : !!it.unlocked;
+    if (!isUnlocked) {
+      const lockMsg = _shopTab === 'color' ? String(it.price) : ('LEVEL ' + it.unlockLevel);
+      card.appendChild(_makeLockOverlay(lockMsg, _shopTab === 'color'));
+    }
+
+    card.addEventListener('click', () => {
+      if (_shopTab === 'theme') {
+        if (!it.unlocked) { Toast.show('Unlocks at Level ' + it.unlockLevel + '!'); return; }
+        Sound.select();
+        Economy.selectTheme(it.id, highestLvl);
+        _initBg();
+        Toast.show('Theme: ' + it.name);
+        _renderShop();
+        return;
+      }
+      if (_shopTab === 'tube') {
+        if (!it.unlocked) { Toast.show('Unlocks at Level ' + it.unlockLevel + '!'); return; }
+        Sound.select();
+        Economy.selectTube(it.id, highestLvl);
+        if (_st.mode !== 'home') _renderTubesAll();
+        Toast.show('Bottles: ' + it.name);
+        _renderShop();
+        return;
+      }
+      if (it.owned) {
+        Sound.select();
+        Economy.selectPalette(it.id);
+        if (_st.mode !== 'home') { _renderTarget(); _renderTubesAll(); }
+        Toast.show('Colors: ' + it.name);
+        _renderShop();
+        return;
+      }
+      const prev = _getCoinBalance();
+      const res = Economy.buyPalette(it.id);
+      if (!res.ok) {
+        Toast.show('Need ' + it.price + ' coins');
+        return;
+      }
+      Sound.coinSpend();
+      _animateWalletCount(prev, res.balance);
+      _onCoinBalanceChanged();
+      if (_st.mode !== 'home') { _renderTarget(); _renderTubesAll(); }
+      Toast.show('Unlocked ' + it.name + '!');
+      _renderShop();
+    });
+
+    grid.appendChild(card);
+  }
+}
+
+function _openShop(tabOpt) {
+  if (tabOpt === 'tube' || tabOpt === 'theme' || tabOpt === 'color') _shopTab = tabOpt;
   _renderShop();
   _showOverlay(dom.shopOverlay, true);
   _updateRewardedAdButtons();
@@ -2109,19 +2668,264 @@ function _closeShop() {
   _updateRewardedAdButtons();
 }
 
+/* ---- home diorama scene (cozy potion studio + heart flask + kitty mascot) ---- */
+let _homeSceneRaf = null;
+
+function _paintHomeWorkshop(ctx, W, H, tSec) {
+  ctx.clearRect(0, 0, W, H);
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#3a2257');
+  bg.addColorStop(0.55, '#593b78');
+  bg.addColorStop(1, '#261444');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Arched studio windows + soft sunlit rays
+  ctx.save();
+  for (let wIdx = 0; wIdx < 2; wIdx++) {
+    const wx = wIdx === 0 ? W * 0.25 : W * 0.80;
+    const wy = H * 0.28, ww = W * 0.19, wh = H * 0.16;
+    const wg = ctx.createLinearGradient(wx, wy, wx, wy + wh);
+    wg.addColorStop(0, '#fce9b5');
+    wg.addColorStop(1, '#b8d7f5');
+    ctx.fillStyle = wg;
+    ctx.beginPath();
+    ctx.arc(wx, wy + ww / 2, ww / 2, Math.PI, 0);
+    ctx.lineTo(wx + ww / 2, wy + wh);
+    ctx.lineTo(wx - ww / 2, wy + wh);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(72,42,96,0.65)'; ctx.lineWidth = 3; ctx.stroke();
+
+    // Sunbeam shaft gently pulsing
+    const beamAlpha = 0.08 + 0.03 * Math.sin(tSec * 1.1 + wIdx);
+    ctx.fillStyle = 'rgba(255, 240, 200, ' + beamAlpha.toFixed(3) + ')';
+    ctx.beginPath();
+    ctx.moveTo(wx - ww * 0.4, wy + wh);
+    ctx.lineTo(wx + ww * 0.4, wy + wh);
+    ctx.lineTo(wx + ww * 0.9, H * 0.72);
+    ctx.lineTo(wx - ww * 0.9, H * 0.72);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+
+  // Curved glass potion tubes overhead with animated rising bubbles
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(255, 190, 90, 0.28)'; ctx.lineWidth = Math.max(16, W * 0.048);
+  ctx.beginPath(); ctx.moveTo(0, H * 0.18); ctx.quadraticCurveTo(W * 0.28, H * 0.08, W * 0.48, 0); ctx.stroke();
+  ctx.strokeStyle = 'rgba(244, 143, 177, 0.26)'; ctx.lineWidth = Math.max(14, W * 0.042);
+  ctx.beginPath(); ctx.moveTo(W * 0.22, H * 0.27); ctx.quadraticCurveTo(W * 0.62, H * 0.22, W, H * 0.12); ctx.stroke();
+  for (let b = 0; b < 5; b++) {
+    const p = ((tSec * 0.18 + b * 0.2) % 1);
+    const bx = W * (0.24 + p * 0.72);
+    const by = H * (0.26 - p * 0.13);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+    ctx.beginPath(); ctx.arc(bx, by, 2.5 + (b % 2), 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+
+  // Swaying festival bunting flags across rafters
+  const flagColors = ['#ff6b6b', '#ffd93d', '#6bcb77', '#4fc3f7', '#ce93d8'];
+  for (let f = 0; f < 6; f++) {
+    const fx = W * (0.14 + f * 0.145);
+    const fy = H * 0.14 + Math.sin(f * 0.6) * 8;
+    const sway = Math.sin(tSec * 1.9 + f * 0.7) * 3.2;
+    ctx.fillStyle = flagColors[f % flagColors.length];
+    ctx.beginPath();
+    ctx.moveTo(fx - 10, fy);
+    ctx.lineTo(fx + 10, fy + 2);
+    ctx.lineTo(fx + sway, fy + 18);
+    ctx.closePath(); ctx.fill();
+  }
+
+  // Left glowing cauldron w/ soft rising mist
+  ctx.save();
+  ctx.fillStyle = '#3c2559';
+  ctx.beginPath(); ctx.ellipse(W * 0.08, H * 0.56, 36, 30, 0, 0, Math.PI * 2); ctx.fill();
+  const mistA = 0.22 + 0.12 * Math.sin(tSec * 2.0);
+  ctx.fillStyle = 'rgba(224, 64, 251, ' + mistA.toFixed(3) + ')';
+  ctx.beginPath(); ctx.ellipse(W * 0.08, H * 0.50 - Math.sin(tSec * 1.5) * 4, 28, 12, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  // Wooden pedestal altar in center
+  const cx = W * 0.50, pedY = H * 0.61;
+  const rx = Math.min(165, W * 0.42), ry = 28;
+  ctx.save();
+  ctx.fillStyle = '#4e312c';
+  ctx.beginPath(); ctx.ellipse(cx, pedY + 14, rx, ry + 6, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#754e41';
+  ctx.beginPath(); ctx.ellipse(cx, pedY, rx * 0.94, ry, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = 'rgba(255, 224, 130, 0.35)'; ctx.lineWidth = 2; ctx.stroke();
+  // Glowing rune badge on front rim
+  const runeGlow = 0.7 + 0.3 * Math.sin(tSec * 2.4);
+  ctx.fillStyle = 'rgba(255, 213, 79, ' + runeGlow.toFixed(2) + ')';
+  ctx.beginPath(); ctx.moveTo(cx, pedY + 14); ctx.lineTo(cx + 8, pedY + 24); ctx.lineTo(cx, pedY + 34); ctx.lineTo(cx - 8, pedY + 24); ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // Crystal Heart Potion Flask centered on altar (sloshing liquid + fruit sparkles)
+  const hCx = cx - W * 0.04, hBot = pedY - 4, hScale = Math.min(1.05, W / 370);
+  const hW = 128 * hScale, hH = 126 * hScale;
+  ctx.save();
+  function traceHeart() {
+    ctx.beginPath();
+    ctx.moveTo(hCx, hBot);
+    ctx.bezierCurveTo(hCx - hW * 0.62, hBot - hH * 0.28, hCx - hW * 0.62, hBot - hH * 0.88, hCx - hW * 0.22, hBot - hH * 0.88);
+    ctx.bezierCurveTo(hCx - hW * 0.06, hBot - hH * 0.88, hCx, hBot - hH * 0.72, hCx, hBot - hH * 0.72);
+    ctx.bezierCurveTo(hCx, hBot - hH * 0.72, hCx + hW * 0.06, hBot - hH * 0.88, hCx + hW * 0.22, hBot - hH * 0.88);
+    ctx.bezierCurveTo(hCx + hW * 0.62, hBot - hH * 0.88, hCx + hW * 0.62, hBot - hH * 0.28, hCx, hBot);
+    ctx.closePath();
+  }
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.14)';
+  traceHeart(); ctx.fill();
+
+  ctx.save();
+  traceHeart(); ctx.clip();
+  const liqTop = hBot - hH * 0.56;
+  const liqG = ctx.createLinearGradient(0, liqTop, 0, hBot);
+  liqG.addColorStop(0, '#ffe082');
+  liqG.addColorStop(0.55, '#ffb74d');
+  liqG.addColorStop(1, '#ff7043');
+  ctx.fillStyle = liqG;
+  ctx.beginPath();
+  ctx.moveTo(hCx - hW, hBot + 5);
+  for (let px = hCx - hW; px <= hCx + hW; px += 4) {
+    const wy = liqTop + Math.sin((px - hCx) * 0.06 + tSec * 2.3) * 3.5;
+    ctx.lineTo(px, wy);
+  }
+  ctx.lineTo(hCx + hW, hBot + 5); ctx.closePath(); ctx.fill();
+
+  // Floating fruit-orb accents inside potion
+  ctx.fillStyle = '#fff59d';
+  ctx.beginPath(); ctx.arc(hCx - 22 * hScale, liqTop + 26 + Math.sin(tSec * 1.7) * 3, 6 * hScale, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ff5252';
+  ctx.beginPath(); ctx.arc(hCx - 28 * hScale, liqTop + 12 + Math.cos(tSec * 2.1) * 2.5, 5 * hScale, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.65)';
+  for (let b = 0; b < 4; b++) {
+    const by = hBot - ((tSec * 22 + b * 25) % (hH * 0.48));
+    ctx.beginPath(); ctx.arc(hCx + (b - 1.5) * 16 * hScale, by, 2.2, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+
+  traceHeart();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)'; ctx.lineWidth = 2.6; ctx.stroke();
+  // Glass neck & specular curve
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)'; ctx.lineWidth = 2.4;
+  ctx.strokeRect(hCx - 14 * hScale, hBot - hH * 1.02, 28 * hScale, hH * 0.14);
+  ctx.restore();
+
+  // Original Cute Alchemist Wizard Kitty Mascot on right side of pedestal
+  const kCx = cx + W * 0.17, kBot = pedY + 4 + Math.sin(tSec * 2.2) * 2.2, s = hScale;
+  ctx.save();
+  // Cape & body
+  ctx.fillStyle = '#5e35b1';
+  ctx.beginPath();
+  ctx.moveTo(kCx - 24 * s, kBot); ctx.lineTo(kCx + 24 * s, kBot);
+  ctx.lineTo(kCx + 15 * s, kBot - 36 * s); ctx.lineTo(kCx - 15 * s, kBot - 36 * s);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#f5a25d';
+  ctx.beginPath(); ctx.ellipse(kCx, kBot - 16 * s, 14 * s, 16 * s, 0, 0, Math.PI * 2); ctx.fill();
+  // Head + ears
+  ctx.beginPath(); ctx.arc(kCx, kBot - 40 * s, 18 * s, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(kCx - 16 * s, kBot - 48 * s); ctx.lineTo(kCx - 18 * s, kBot - 63 * s); ctx.lineTo(kCx - 5 * s, kBot - 54 * s); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(kCx + 16 * s, kBot - 48 * s); ctx.lineTo(kCx + 18 * s, kBot - 63 * s); ctx.lineTo(kCx + 5 * s, kBot - 54 * s); ctx.closePath(); ctx.fill();
+  // Eyes (periodic cute blink)
+  const blinking = Math.sin(tSec * 0.85) > 0.96;
+  ctx.fillStyle = '#2c1708';
+  if (blinking) {
+    ctx.fillRect(kCx - 9 * s, kBot - 41 * s, 5 * s, 2 * s);
+    ctx.fillRect(kCx + 4 * s, kBot - 41 * s, 5 * s, 2 * s);
+  } else {
+    ctx.beginPath(); ctx.arc(kCx - 7 * s, kBot - 40 * s, 2.8 * s, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(kCx + 7 * s, kBot - 40 * s, 2.8 * s, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(kCx - 8 * s, kBot - 41 * s, 1 * s, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(kCx + 6 * s, kBot - 41 * s, 1 * s, 0, Math.PI * 2); ctx.fill();
+  }
+  // Pointy Wizard Hat with gold band
+  ctx.fillStyle = '#673ab7';
+  ctx.beginPath(); ctx.ellipse(kCx, kBot - 54 * s, 24 * s, 6 * s, -0.06, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(kCx - 16 * s, kBot - 55 * s); ctx.lineTo(kCx + 6 * s, kBot - 84 * s); ctx.lineTo(kCx + 15 * s, kBot - 55 * s);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#ffd54f'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(kCx - 13 * s, kBot - 57 * s); ctx.lineTo(kCx + 13 * s, kBot - 56 * s); ctx.stroke();
+  // Wand & glowing tip spark
+  const wandTipX = kCx - 29 * s, wandTipY = kBot - 46 * s;
+  ctx.strokeStyle = '#8d6e63'; ctx.lineWidth = 2.6;
+  ctx.beginPath(); ctx.moveTo(kCx - 12 * s, kBot - 24 * s); ctx.lineTo(wandTipX, wandTipY); ctx.stroke();
+  const sparkR = (4.5 + Math.sin(tSec * 5.0) * 2.0) * s;
+  const sg = ctx.createRadialGradient(wandTipX, wandTipY, 0, wandTipX, wandTipY, sparkR * 2.5);
+  sg.addColorStop(0, 'rgba(255, 245, 157, 0.95)');
+  sg.addColorStop(1, 'rgba(255, 213, 79, 0)');
+  ctx.fillStyle = sg;
+  ctx.beginPath(); ctx.arc(wandTipX, wandTipY, sparkR * 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  // Floating ambient stardust motes
+  for (let m = 0; m < 10; m++) {
+    const mx = W * ((0.08 + m * 0.095 + Math.sin(tSec * 0.4 + m) * 0.03) % 1);
+    const my = H * (0.72 - ((tSec * 0.05 + m * 0.11) % 0.62));
+    const ma = 0.25 + 0.35 * Math.sin(tSec * 2.0 + m);
+    ctx.fillStyle = 'rgba(255, 224, 130, ' + Math.max(0.05, ma).toFixed(2) + ')';
+    ctx.beginPath(); ctx.arc(mx, my, 1.5 + (m % 2), 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function _renderHomeSceneFrame(now) {
+  const cvs = dom.homeSceneCanvas;
+  if (!cvs || !cvs.getContext) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const W = window.innerWidth || 390;
+  const H = window.innerHeight || 844;
+  if (cvs.width !== W * dpr || cvs.height !== H * dpr) {
+    cvs.width = W * dpr; cvs.height = H * dpr;
+    cvs.style.width = W + 'px'; cvs.style.height = H + 'px';
+  }
+  const ctx = cvs.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  _paintHomeWorkshop(ctx, W, H, (now || performance.now()) * 0.001);
+}
+
+function _stopHomeScene() {
+  if (_homeSceneRaf) {
+    cancelAnimationFrame(_homeSceneRaf);
+    _homeSceneRaf = null;
+  }
+}
+
+function _startHomeScene() {
+  _stopHomeScene();
+  if (_st.mode !== 'home') return;
+  _renderHomeSceneFrame(performance.now());
+  if (_reducedMotion() || document.hidden) return;
+  function tick(now) {
+    if (_st.mode !== 'home' || _reducedMotion() || document.hidden) {
+      _homeSceneRaf = null;
+      return;
+    }
+    _renderHomeSceneFrame(now);
+    _homeSceneRaf = requestAnimationFrame(tick);
+  }
+  _homeSceneRaf = requestAnimationFrame(tick);
+}
+
 /* ---- home ---- */
 function _updateHome() {
   const cfg = typeof getLevelConfig === 'function' ? getLevelConfig(_st.levelNum) : null;
   dom.homeLevelInfo.textContent = 'Level ' + _st.levelNum + (cfg ? ' · ' + cfg.realmName : '');
+  dom.btnPlay.textContent = 'LEVEL ' + _st.levelNum;
   if (_daily.streak > 0) {
     dom.homeStreak.classList.remove('hidden');
     dom.streakNum.textContent = _daily.streak;
   } else { dom.homeStreak.classList.add('hidden'); }
-  dom.btnDaily.textContent = _daily.results[_todayStr()]
-    ? '📅 Daily ✓ Done' : '📅 Daily Puzzle';
+  const dailyDone = !!_daily.results[_todayStr()];
+  if (dom.homeDailyCaption) dom.homeDailyCaption.textContent = dailyDone ? 'Daily ✓' : 'Daily';
+  if (dom.btnModesDaily) dom.btnModesDaily.textContent = dailyDone ? '📅 Daily ✓ Done' : '📅 Daily Puzzle';
+  if (dom.btnHomeRemoveAds) dom.btnHomeRemoveAds.classList.toggle('hidden', Monetization.isAdsRemoved());
   _refreshWalletUI(false);
   _updateRewardedAdButtons();
   _updateProgress();
+  _startHomeScene();
 }
 
 function _goHome() {
@@ -2146,11 +2950,15 @@ function _goHome() {
   _showOverlay(dom.dailyDoneOverlay, false);
   _showOverlay(dom.shareOverlay, false);
   _showOverlay(dom.shopOverlay, false);
+  _showOverlay(dom.modesOverlay, false);
   dom.tutorialBar.classList.add('hidden');
   _updateHome(); _persist();
 }
 
 function _showGame(title) {
+  _stopHomeScene();
+  _showOverlay(dom.modesOverlay, false);
+  _showOverlay(dom.shopOverlay, false);
   dom.homeScreen.classList.add('hidden');
   dom.app.classList.remove('hidden');
   dom.hudLevel.textContent = title;
@@ -2196,7 +3004,7 @@ function _startLevel(num) {
   const seed = _st._forcedSeed !== undefined ? _st._forcedSeed : undefined;
   const lv = generateLevel(num, seed);
   const cfg = lv.config || (typeof getLevelConfig === 'function' ? getLevelConfig(num) : null);
-  const title = cfg ? ('Lv ' + num + ' · ' + cfg.realmName) : ('Level ' + num);
+  const title = 'LEVEL ' + num;
   _initPlaySession(lv, cfg, title);
   _persist();
   _maybeStartTut(num);
@@ -2219,6 +3027,7 @@ function _loadCode() {
   if (!lv) { Toast.show('Could not load this puzzle'); return; }
   _st.mode = 'challenge';
   _st.challengeCode = raw.toUpperCase(); _st.challengeSeed = lv.seed; _st.challengeDiff = lv.difficulty;
+  _showOverlay(dom.modesOverlay, false);
   _initPlaySession(lv, null, 'Challenge');
   dom.codeInput.value = '';
 }
@@ -2284,12 +3093,12 @@ function _renderHUD() {
   dom.hudMoves.textContent = 'Moves: ' + _st.moveCount;
   dom.hudPar.textContent   = 'Par: '   + _st.par;
   dom.undoCount.textContent = _st.undosLeft > 0
-    ? '(' + _st.undosLeft + ')'
-    : (bal >= undoCost ? '(' + undoCost + ')' : '(Ad)');
+    ? String(_st.undosLeft)
+    : (bal >= undoCost ? String(undoCost) : 'AD');
   if (dom.hintCount) {
     dom.hintCount.textContent = _st.hintsLeft > 0
-      ? '(' + _st.hintsLeft + ')'
-      : (bal >= hintCost ? '(' + hintCost + ')' : '(Ad)');
+      ? String(_st.hintsLeft)
+      : (bal >= hintCost ? String(hintCost) : 'AD');
   }
   _refreshWalletUI(false);
 }
@@ -2439,7 +3248,11 @@ function _onWin() {
     const prev = _best[_st.levelNum];
     if (!prev || stars>prev.stars || (stars===prev.stars && moves<prev.moves))
       _best[_st.levelNum] = { moves, stars };
-    if (_st.mode === 'level') { _st.levelNum++; _checkMilestone(); }
+    if (_st.mode === 'level') {
+      _st.levelNum++;
+      if (typeof Economy !== 'undefined' && Economy.setHighestLevel) Economy.setHighestLevel(_st.levelNum);
+      _checkMilestone();
+    }
     const lEarn = typeof Economy !== 'undefined'
       ? Economy.calcLevelEarn({ stars, isFinale: wonIsFinale })
       : { win: 10, starBonus: stars === 3 ? 10 : 0, finaleBonus: wonIsFinale ? 100 : 0, total: 10 + (stars === 3 ? 10 : 0) + (wonIsFinale ? 100 : 0) };
@@ -2769,6 +3582,7 @@ function _getExtraPolicy() {
   }
 
   const extrasLeft = Math.max(0, Math.min(MAX_EXTRA_TUBES - _st.extraTubesAdded, MAX_TUBES - _st.tubes.length));
+  const totalPossible = _st.extraTubesAdded + extrasLeft;
   const firstFreeEligible = _st.mode === 'level'
     ? (_st.levelNum <= 10 || realm <= 2)
     : (realm <= 2);
@@ -2777,10 +3591,12 @@ function _getExtraPolicy() {
   const coinBal = coinMod ? coinMod.getBalance() : 0;
   const tubeCost = _economyCfg() ? _economyCfg().spend.extraTube : 100;
   const costLabel = isFree ? 'FREE' : (coinBal >= tubeCost ? String(tubeCost) : 'AD');
-  const hasPlusSlot = extrasLeft > 0;
-  const slots = _st.tubes.length + (hasPlusSlot ? 1 : 0);
+  const slot0Label = _st.extraTubesAdded >= 1 ? '✓' : (firstFreeEligible ? 'FREE' : (coinBal >= tubeCost ? String(tubeCost) : 'AD'));
+  const slot1Label = _st.extraTubesAdded >= 2 ? '✓' : (coinBal >= tubeCost ? String(tubeCost) : 'AD');
+  const hasPlusSlot = false;
+  const slots = _st.tubes.length;
 
-  return { realm, extrasLeft, hasPlusSlot, isFree, costLabel, tubeCost, coinMod, coinBal, slots };
+  return { realm, extrasLeft, totalPossible, hasPlusSlot, isFree, costLabel, slot0Label, slot1Label, tubeCost, coinMod, coinBal, slots };
 }
 
 function _isPlusPulsing() {
@@ -2791,22 +3607,41 @@ function _isPlusPulsing() {
 }
 
 function _updatePlusSlotVisual(policyOpt) {
-  if (!_plusEl) return;
   const policy = policyOpt || _getExtraPolicy();
-  if (!policy.hasPlusSlot) return;
+  const pulsing = _isPlusPulsing() && policy.extrasLeft > 0;
+  const coinStr = String(policy.tubeCost || 100);
 
-  const pulsing = _isPlusPulsing();
-  _plusEl.wrapper.classList.toggle('is-stuck', pulsing);
-  _plusEl.wrapper.classList.toggle('is-busy', !!_st._addingTube);
-  if (_plusEl.costEl) {
-    _plusEl.costEl.textContent = policy.costLabel;
-    _plusEl.costEl.classList.toggle('cost-free', policy.costLabel === 'FREE');
-    _plusEl.costEl.classList.toggle('cost-coins', policy.costLabel === '100');
+  if (dom.btnAddTube) {
+    dom.btnAddTube.classList.toggle('is-stuck', pulsing);
+    dom.btnAddTube.classList.toggle('is-ready', policy.extrasLeft > 0);
+    dom.btnAddTube.classList.toggle('is-exhausted', policy.extrasLeft <= 0);
+    dom.btnAddTube.classList.toggle('is-busy', !!_st._addingTube);
   }
-  if (_plusEl.leftEl) {
-    _plusEl.leftEl.textContent = policy.extrasLeft + ' left';
+  if (dom.addTubeBadge) {
+    dom.addTubeBadge.textContent = policy.extrasLeft > 0 ? policy.costLabel : '0';
+    dom.addTubeBadge.classList.toggle('cost-free', policy.extrasLeft > 0 && policy.costLabel === 'FREE');
+    dom.addTubeBadge.classList.toggle('cost-coins', policy.extrasLeft > 0 && policy.costLabel === coinStr);
   }
-  _redrawPlusSlot();
+  if (dom.addTubeLeft) {
+    dom.addTubeLeft.textContent = policy.extrasLeft > 0 ? (policy.extrasLeft + ' left') : '0 left';
+  }
+
+  // Update top-shelf AD tube icons (Image 6)
+  const slotEls = [
+    { btn: dom.topAddSlot0, badge: dom.topAddBadge0, used: _st.extraTubesAdded >= 1 || policy.totalPossible < 1, label: policy.slot0Label, isNext: _st.extraTubesAdded === 0 && policy.extrasLeft > 0 },
+    { btn: dom.topAddSlot1, badge: dom.topAddBadge1, used: _st.extraTubesAdded >= 2 || policy.totalPossible < 2, label: policy.slot1Label, isNext: _st.extraTubesAdded === 1 && policy.extrasLeft > 0 },
+  ];
+  for (let i = 0; i < slotEls.length; i++) {
+    const s = slotEls[i];
+    if (!s.btn) continue;
+    s.btn.classList.toggle('is-used', s.used);
+    s.btn.classList.toggle('is-stuck', pulsing && s.isNext);
+    if (s.badge) {
+      s.badge.textContent = s.used ? '✓' : s.label;
+      s.badge.classList.toggle('cost-free', !s.used && s.label === 'FREE');
+      s.badge.classList.toggle('cost-coins', !s.used && s.label === coinStr);
+    }
+  }
 }
 
 function _updateDebugTubesOverlay(policyOpt) {
@@ -2958,7 +3793,11 @@ async function _onAddPlusTube() {
   if (_st._addingTube || _st.won || _st.animating || _st.mode === 'home') return;
 
   const policy = _getExtraPolicy();
-  if (policy.extrasLeft <= 0) return;
+  if (policy.extrasLeft <= 0) {
+    Toast.show('No add-tube chances left');
+    Sound.error();
+    return;
+  }
 
   if (!policy.isFree) {
     const tubeCost = policy.tubeCost || 100;
@@ -3156,6 +3995,10 @@ function _showWinOverlayAnimated(stars, moves, par, code, cheer, usedExtraTube) 
   if (dom.winExtraBadge) {
     dom.winExtraBadge.classList.toggle('hidden', !usedExtraTube);
   }
+  _updateWinUnlockMeters();
+  if (dom.btnNext) {
+    dom.btnNext.textContent = _st.mode === 'challenge' ? 'Next Challenge ▶' : ('LEVEL ' + _st.levelNum);
+  }
   if (dom.winCoinsRow && dom.winCoinsText) {
     const wc = _st._lastWinCoins;
     const total = wc ? wc.total : 0;
@@ -3236,6 +4079,65 @@ function _animateMovesCount(el, target, par) {
   }, interval);
 }
 
+function _renderUnlockMeter(kind, info, rowEl, labelEl, fillEl, fracEl, cardBtn, cvsEl, newBadgeEl) {
+  if (!rowEl) return;
+  if (!info) {
+    rowEl.classList.add('hidden');
+    return;
+  }
+  rowEl.classList.remove('hidden');
+  const cur = Math.min(info.current, info.unlockLevel);
+  const startPct = Math.max(0, Math.min(100, ((Math.max(0, cur - 1)) / info.unlockLevel) * 100));
+  const endPct = Math.max(0, Math.min(100, (cur / info.unlockLevel) * 100));
+  if (labelEl) {
+    labelEl.textContent = info.justUnlocked
+      ? ('Unlocked ' + info.item.name + '!')
+      : ('Unlocks at Lv. ' + info.unlockLevel);
+  }
+  if (fracEl) fracEl.textContent = cur + '/' + info.unlockLevel;
+  if (newBadgeEl) newBadgeEl.classList.toggle('hidden', !info.justUnlocked);
+  if (fillEl) {
+    if (_reducedMotion()) {
+      fillEl.style.width = endPct.toFixed(1) + '%';
+    } else {
+      fillEl.style.width = startPct.toFixed(1) + '%';
+      setTimeout(() => { fillEl.style.width = endPct.toFixed(1) + '%'; }, 90);
+    }
+  }
+  if (cvsEl) {
+    const thumbItem = Object.assign({ unlocked: info.justUnlocked, active: false }, info.item);
+    _drawCollectionCardThumb(cvsEl, kind, thumbItem);
+  }
+  if (cardBtn) {
+    cardBtn.onclick = () => {
+      if (info.justUnlocked && typeof Economy !== 'undefined') {
+        Sound.select();
+        if (kind === 'tube') { Economy.selectTube(info.item.id); Toast.show('Equipped ' + info.item.name + '!'); }
+        else { Economy.selectTheme(info.item.id); _initBg(); Toast.show('Theme: ' + info.item.name + '!'); }
+      } else {
+        Toast.show('Unlocks at Level ' + info.unlockLevel + '!');
+      }
+    };
+  }
+}
+
+function _updateWinUnlockMeters() {
+  if (typeof Economy === 'undefined' || !Economy.getNextUnlock) return;
+  const completedLvl = _st._lastWonLevelNum !== null ? _st._lastWonLevelNum : Math.max(1, _st.levelNum - 1);
+  const tubeInfo = Economy.getNextUnlock('tube', completedLvl);
+  const themeInfo = Economy.getNextUnlock('theme', completedLvl);
+  _renderUnlockMeter(
+    'tube', tubeInfo,
+    dom.winUnlockTubeRow, dom.winUnlockTubeLabel, dom.winUnlockTubeFill,
+    dom.winUnlockTubeFrac, dom.winUnlockTubeCard, dom.winUnlockTubeCanvas, dom.winUnlockTubeNew
+  );
+  _renderUnlockMeter(
+    'theme', themeInfo,
+    dom.winUnlockThemeRow, dom.winUnlockThemeLabel, dom.winUnlockThemeFill,
+    dom.winUnlockThemeFrac, dom.winUnlockThemeCard, dom.winUnlockThemeCanvas, dom.winUnlockThemeNew
+  );
+}
+
 function _populateStarfield() {
   var sf = dom.winStarfield; if (!sf) return;
   sf.innerHTML = '';
@@ -3288,6 +4190,112 @@ function _showCombo(n) {
    =================================================================== */
 let _bgDoodleCache = null;
 
+function _paintSceneTheme(ctx, themeId, W, H, isMini) {
+  const thList = typeof Economy !== 'undefined' && Economy.CONFIG ? Economy.CONFIG.themes : null;
+  const theme = (thList && thList.find(t => t.id === themeId)) || {
+    id: 'doodle', bgTop: '#12082b', bgBot: '#1d1242', hill1: '#23154d', hill2: '#170d36', accent: '#7c4dff',
+  };
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, theme.bgTop);
+  g.addColorStop(1, theme.bgBot);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  if (theme.id === 'doodle') {
+    _drawDoodlePattern(ctx, W, H, isMini);
+    return;
+  }
+
+  ctx.save();
+  if (theme.id === 'forest' || theme.id === 'nightwoods') {
+    if (theme.id === 'nightwoods') {
+      ctx.fillStyle = '#e8e6ff';
+      ctx.beginPath(); ctx.arc(W * 0.72, H * 0.22, W * 0.08, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.beginPath();
+      ctx.moveTo(W * 0.22, H * 0.14); ctx.quadraticCurveTo(W * 0.25, H * 0.11, W * 0.28, H * 0.14);
+      ctx.moveTo(W * 0.30, H * 0.17); ctx.quadraticCurveTo(W * 0.33, H * 0.14, W * 0.36, H * 0.17);
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+    ctx.fillStyle = theme.hill1;
+    ctx.beginPath();
+    ctx.moveTo(0, H * 0.65); ctx.lineTo(W * 0.28, H * 0.36); ctx.lineTo(W * 0.56, H * 0.58);
+    ctx.lineTo(W * 0.80, H * 0.34); ctx.lineTo(W, H * 0.56); ctx.lineTo(W, H); ctx.lineTo(0, H);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = theme.hill2;
+    ctx.beginPath();
+    ctx.moveTo(0, H * 0.74); ctx.quadraticCurveTo(W * 0.5, H * 0.68, W, H * 0.76);
+    ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath(); ctx.fill();
+    // Stylized pine silhouettes
+    const treeX = [0.09, 0.20, 0.80, 0.91];
+    for (let i = 0; i < treeX.length; i++) {
+      const tx = W * treeX[i], ty = H * 0.78, tw = W * 0.12, th = H * 0.24;
+      ctx.beginPath();
+      ctx.moveTo(tx, ty - th); ctx.lineTo(tx + tw, ty); ctx.lineTo(tx - tw, ty);
+      ctx.closePath(); ctx.fill();
+    }
+    // Deer silhouette in center clearing
+    ctx.beginPath();
+    ctx.ellipse(W * 0.50, H * 0.71, W * 0.055, H * 0.025, 0, 0, Math.PI * 2);
+    ctx.fillRect(W * 0.46, H * 0.71, W * 0.015, H * 0.08);
+    ctx.fillRect(W * 0.52, H * 0.71, W * 0.015, H * 0.08);
+    ctx.fillRect(W * 0.525, H * 0.62, W * 0.02, H * 0.10);
+    ctx.arc(W * 0.54, H * 0.62, W * 0.024, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (theme.id === 'sunset' || theme.id === 'desert') {
+    ctx.fillStyle = theme.accent;
+    ctx.globalAlpha = 0.75;
+    ctx.beginPath(); ctx.arc(W * 0.58, H * 0.52, W * 0.12, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = theme.hill1;
+    ctx.beginPath();
+    ctx.moveTo(0, H * 0.76); ctx.lineTo(W * 0.34, H * 0.44); ctx.lineTo(W * 0.64, H * 0.76);
+    ctx.lineTo(W * 0.80, H * 0.50); ctx.lineTo(W, H * 0.76); ctx.lineTo(W, H); ctx.lineTo(0, H);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = theme.hill2;
+    ctx.fillRect(0, H * 0.75, W, H * 0.25);
+  } else if (theme.id === 'cosmos' || theme.id === 'aurora') {
+    ctx.fillStyle = 'rgba(255,255,255,0.65)';
+    for (let s = 0; s < 18; s++) {
+      ctx.beginPath();
+      ctx.arc(((s * 73) % 100) * 0.01 * W, ((s * 41) % 60) * 0.01 * H, (s % 2) + 0.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (theme.id === 'cosmos') {
+      ctx.fillStyle = '#3f51b5';
+      ctx.beginPath(); ctx.arc(W * 0.52, H * 0.46, W * 0.14, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#9fa8da'; ctx.lineWidth = Math.max(2, W * 0.02);
+      ctx.beginPath(); ctx.ellipse(W * 0.52, H * 0.46, W * 0.28, W * 0.06, -0.25, 0, Math.PI * 2); ctx.stroke();
+    } else {
+      ctx.strokeStyle = 'rgba(105, 240, 174, 0.45)'; ctx.lineWidth = Math.max(6, H * 0.07);
+      ctx.beginPath(); ctx.moveTo(0, H * 0.32);
+      ctx.quadraticCurveTo(W * 0.45, H * 0.16, W, H * 0.36); ctx.stroke();
+      ctx.fillStyle = theme.hill2;
+      ctx.beginPath(); ctx.moveTo(0, H); ctx.lineTo(0, H * 0.74); ctx.lineTo(W * 0.4, H * 0.56);
+      ctx.lineTo(W * 0.75, H * 0.68); ctx.lineTo(W, H * 0.58); ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+    }
+  } else if (theme.id === 'skyline') {
+    ctx.fillStyle = theme.hill2;
+    const blds = [0.12, 0.22, 0.16, 0.28, 0.18, 0.24, 0.15];
+    const bw = W / blds.length;
+    for (let i = 0; i < blds.length; i++) {
+      const bh = H * (0.28 + blds[i]);
+      ctx.fillRect(i * bw, H - bh, bw - 2, bh);
+    }
+  } else {
+    // lilypad / abyss layered organic circles
+    ctx.fillStyle = theme.hill1;
+    const blobs = [[0.25, 0.32, 0.18], [0.74, 0.28, 0.15], [0.48, 0.66, 0.22], [0.18, 0.80, 0.16]];
+    for (let i = 0; i < blobs.length; i++) {
+      ctx.beginPath();
+      ctx.arc(W * blobs[i][0], H * blobs[i][1], W * blobs[i][2], 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
 function _initBg() {
   _bgCanvas = document.getElementById('bg-canvas');
   if (!_bgCanvas) return;
@@ -3298,12 +4306,14 @@ function _initBg() {
   _bgCtx = _bgCanvas.getContext('2d');
   _bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  // Cache static tiled doodle pattern onto an offscreen canvas for 60fps performance
+  // Cache static active theme background onto offscreen canvas for 60fps
+  const activeThemeId = (typeof Economy !== 'undefined' && Economy.getActiveTheme)
+    ? Economy.getActiveTheme().id : 'doodle';
   _bgDoodleCache = document.createElement('canvas');
   _bgDoodleCache.width = W*dpr; _bgDoodleCache.height = H*dpr;
   var dCtx = _bgDoodleCache.getContext('2d');
   dCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  _drawDoodlePattern(dCtx, W, H);
+  _paintSceneTheme(dCtx, activeThemeId, W, H, false);
   _bgCtx.drawImage(_bgDoodleCache, 0, 0, W, H);
 
   _bgShapes = [];
@@ -3318,14 +4328,14 @@ function _initBg() {
   }
 }
 
-function _drawDoodlePattern(ctx, W, H) {
+function _drawDoodlePattern(ctx, W, H, isMini) {
   // Draw simple line-art doodles at ~5% opacity, tiled
   ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.strokeStyle = isMini ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.05)';
   ctx.lineWidth = 1.2;
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
 
-  const tileSize = 80;
+  const tileSize = isMini ? 42 : 80;
   const doodles = [_doodleDroplet, _doodleFlask, _doodleStar, _doodlePlanet, _doodleGem, _doodleRocket];
 
   for (let y = 0; y < H + tileSize; y += tileSize) {

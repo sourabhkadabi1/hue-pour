@@ -584,8 +584,14 @@ async function runEconomyTests() {
     assert(Economy.spend(cfg.spend.extraHint) && Economy.getBalance() === 960, 'Hint spend 40 failed');
     assert(Economy.spend(cfg.spend.extraUndos) && Economy.getBalance() === 930, 'Undos spend 30 failed');
     assert(Economy.spend(cfg.spend.extraTube) && Economy.getBalance() === 830, 'Extra tube spend 100 failed');
-    const palRes = Economy.buyPalette('pastel');
+    const palRes = Economy.buyPalette('candy');
     assert(palRes.ok && Economy.getBalance() === 30, 'Palette 800 purchase failed');
+
+    // Theme & Bottle unlock gates
+    Economy.forceHighestLevel(1);
+    assert(Economy.getThemes(1).length === 10 && Economy.getTubes(1).length === 10, '10 themes & 10 bottles expected');
+    assert(!Economy.selectTube('nursing', 1) && Economy.selectTube('nursing', 10), 'Milk Bottles unlock at Lv 10');
+    assert(!Economy.selectTheme('nightwoods', 1) && Economy.selectTheme('nightwoods', 20), 'Moonlit Pines unlocks at Lv 20');
 
     // 4. Rewarded ad +150 cooldown (30s) & daily limit (10/day)
     localStorage.removeItem(cfg.storageKeys.rewardedAdLog);

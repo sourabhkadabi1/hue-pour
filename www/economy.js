@@ -1,14 +1,15 @@
 // ============================================================
-// HUE POUR — Economy & Tunable Config
+// HUE POUR — Economy, Unlocks & Tunable Config
 // Offline localStorage wallet, earn/spend rules, rewarded-ad
-// cooldowns & daily caps, interstitial gating, and shop palettes.
+// cooldowns & daily caps, interstitial gating, and unlockable
+// themes, bottles (tubes), and color palettes.
 // ============================================================
 'use strict';
 
 const Economy = (() => {
   /* -------------------------------------------------------------------
      SINGLE TUNABLE CONFIG OBJECT
-     Adjust all rewards, costs, ad limits, and palettes here.
+     Adjust all rewards, costs, ad limits, unlocks, and palettes here.
      ------------------------------------------------------------------- */
   const CONFIG = {
     storageKeys: {
@@ -16,6 +17,9 @@ const Economy = (() => {
       legacyWallet:   'hp_coins',
       rewardedAdLog:  'hue_pour_rewarded_ad_log',
       palettes:       'hue_pour_palettes',
+      themes:         'hue_pour_themes',
+      tubes:          'hue_pour_tubes',
+      highestLevel:   'hue_pour_highest_level',
       lastRewardedAt: 'hue_pour_last_rewarded_at',
     },
     earn: {
@@ -46,34 +50,153 @@ const Economy = (() => {
       interstitialMinLevel:        6,       // never show interstitial in levels 1-5
       interstitialMinCompleted:    6,       // never show interstitial when levelsCompleted <= 5
     },
+    tubes: [
+      { id: 'classic',   name: 'Classic Tubes',   unlockLevel: 1,   accent: '#cfd8dc' },
+      { id: 'nursing',   name: 'Milk Bottles',    unlockLevel: 10,  accent: '#4dd0e1' },
+      { id: 'soda',      name: 'Soda Bottles',    unlockLevel: 30,  accent: '#ef5350' },
+      { id: 'champagne', name: 'Fizz Bottles',    unlockLevel: 50,  accent: '#f06292' },
+      { id: 'vase',      name: 'Blossom Vases',   unlockLevel: 70,  accent: '#ba68c8' },
+      { id: 'cocktail',  name: 'Cocktail Glass',  unlockLevel: 90,  accent: '#66bb6a' },
+      { id: 'cork',      name: 'Corked Vials',    unlockLevel: 110, accent: '#bcaaa4' },
+      { id: 'pineapple', name: 'Tiki Flasks',     unlockLevel: 130, accent: '#ffb74d' },
+      { id: 'mushroom',  name: 'Shroom Flasks',   unlockLevel: 150, accent: '#e57373' },
+      { id: 'winter',    name: 'Frost Bottles',   unlockLevel: 170, accent: '#81d4fa' },
+    ],
+    themes: [
+      { id: 'doodle',     name: 'Alchemist Night',  unlockLevel: 1,   bgTop: '#12082b', bgBot: '#1d1242', hill1: '#23154d', hill2: '#170d36', accent: '#7c4dff' },
+      { id: 'forest',     name: 'Emerald Woods',    unlockLevel: 1,   bgTop: '#7be3b5', bgBot: '#1b5e4a', hill1: '#144d3c', hill2: '#0b2d23', accent: '#69f0ae' },
+      { id: 'nightwoods', name: 'Moonlit Pines',    unlockLevel: 20,  bgTop: '#1d1a4e', bgBot: '#0d0c28', hill1: '#29245e', hill2: '#13103a', accent: '#b388ff' },
+      { id: 'sunset',     name: 'Crimson Canyon',   unlockLevel: 40,  bgTop: '#6d1b4b', bgBot: '#29102e', hill1: '#8e2d4a', hill2: '#46162d', accent: '#ff8a65' },
+      { id: 'desert',     name: 'Golden Pyramids',  unlockLevel: 60,  bgTop: '#70422b', bgBot: '#2a1617', hill1: '#8f5534', hill2: '#48241b', accent: '#ffd54f' },
+      { id: 'cosmos',     name: 'Starlit Planets',  unlockLevel: 80,  bgTop: '#15123c', bgBot: '#09071d', hill1: '#2b326c', hill2: '#161844', accent: '#4fc3f7' },
+      { id: 'skyline',    name: 'Midnight City',    unlockLevel: 100, bgTop: '#1d1649', bgBot: '#0b0822', hill1: '#2d2466', hill2: '#181242', accent: '#ff80ab' },
+      { id: 'lilypad',    name: 'Jade Pond',        unlockLevel: 120, bgTop: '#134e4a', bgBot: '#08272b', hill1: '#1b6b61', hill2: '#0e3c38', accent: '#80cbc4' },
+      { id: 'abyss',      name: 'Sunken Reef',      unlockLevel: 140, bgTop: '#122c57', bgBot: '#061129', hill1: '#183e75', hill2: '#0b1e42', accent: '#4dd0e1' },
+      { id: 'aurora',     name: 'Aurora Peaks',     unlockLevel: 160, bgTop: '#141e46', bgBot: '#0a0f26', hill1: '#1b3b6f', hill2: '#0f2042', accent: '#a7ffeb' },
+    ],
     palettes: [
       {
-        id:       'classic',
-        name:     'Classic Prism',
-        desc:     'Signature luminous hues',
-        free:     true,
-        swatches: ['#E53935', '#1E88E5', '#FDD835', '#43A047'],
+        id:   'classic',
+        name: 'Classic Prism',
+        desc: 'Signature luminous hues',
+        free: true,
+        swatches: ['#E53935', '#FFD93B', '#2F7DF6', '#2ECC71'],
+        preview: [
+          ['GREEN', 'ORANGE', 'BLUE'],
+          ['PURPLE', 'YELLOW', 'BLUE'],
+          ['VERMILION', 'TEAL', 'RED'],
+        ],
+        colors: null, // uses COLOR_INFO defaults directly
       },
       {
-        id:       'pastel',
-        name:     'Candy Pastel',
-        desc:     'Soft cloudlike glass accents',
-        free:     false,
-        swatches: ['#FF8A80', '#82B1FF', '#FFE57F', '#B9F6CA'],
+        id:   'pastel',
+        name: 'Candy Pastel',
+        desc: 'Soft sherbet glass tones',
+        free: true,
+        swatches: ['#FF7B9C', '#FFE699', '#7CC6FE', '#A8E6CF'],
+        preview: [
+          ['LIME', 'PEACH', 'TEAL'],
+          ['PINK', 'CREAM', 'MINT'],
+          ['LAVENDER', 'AQUA', 'TAN'],
+        ],
+        colors: {
+          RED:       '#FF7B89',
+          VERMILION: '#FFA384',
+          ORANGE:    '#FFB884',
+          AMBER:     '#FFD591',
+          YELLOW:    '#FFF099',
+          LIME:      '#C3EC9B',
+          GREEN:     '#8FE3B4',
+          TEAL:      '#7ED6C9',
+          BLUE:      '#7DB8FF',
+          INDIGO:    '#9D9BFF',
+          PURPLE:    '#C9A0FF',
+          MAGENTA:   '#F69BD3',
+        },
       },
       {
-        id:       'neon',
-        name:     'Neon Cyber',
-        desc:     'Electric arcade highlights',
-        free:     false,
-        swatches: ['#FF1744', '#00E5FF', '#FFEA00', '#00E676'],
+        id:   'candy',
+        name: 'Fruit Punch',
+        desc: 'Punchy juicy pop tones',
+        free: false,
+        swatches: ['#FF3D7F', '#FFAA00', '#0095FF', '#00D68F'],
+        colors: {
+          RED:       '#FF3D7F',
+          VERMILION: '#FF6B4A',
+          ORANGE:    '#FF9E2C',
+          AMBER:     '#FFC933',
+          YELLOW:    '#FFF04D',
+          LIME:      '#A2EC42',
+          GREEN:     '#00D68F',
+          TEAL:      '#00C4B4',
+          BLUE:      '#0095FF',
+          INDIGO:    '#5E60CE',
+          PURPLE:    '#B5179E',
+          MAGENTA:   '#FF4DC4',
+        },
       },
       {
-        id:       'sunset',
-        name:     'Amber Twilight',
-        desc:     'Warm oasis dusk trim',
-        free:     false,
-        swatches: ['#FF7043', '#AB47BC', '#FFCA28', '#26A69A'],
+        id:   'earthy',
+        name: 'Botanical Earth',
+        desc: 'Warm clay & moss tones',
+        free: false,
+        swatches: ['#C85A53', '#E3B23C', '#4A7C8C', '#5C8D67'],
+        colors: {
+          RED:       '#C85A53',
+          VERMILION: '#D9724B',
+          ORANGE:    '#DE8F4E',
+          AMBER:     '#E3B23C',
+          YELLOW:    '#EAD268',
+          LIME:      '#9DB35B',
+          GREEN:     '#5C8D67',
+          TEAL:      '#3D8282',
+          BLUE:      '#4A7C8C',
+          INDIGO:    '#575C8C',
+          PURPLE:    '#8B5F88',
+          MAGENTA:   '#B85B7B',
+        },
+      },
+      {
+        id:   'neon',
+        name: 'Cyber Neon',
+        desc: 'High-contrast electric glow',
+        free: false,
+        swatches: ['#FF1744', '#FFEA00', '#00E5FF', '#00E676'],
+        colors: {
+          RED:       '#FF1744',
+          VERMILION: '#FF5252',
+          ORANGE:    '#FF9100',
+          AMBER:     '#FFC400',
+          YELLOW:    '#FFEA00',
+          LIME:      '#C6FF00',
+          GREEN:     '#00E676',
+          TEAL:      '#1DE9B6',
+          BLUE:      '#00B0FF',
+          INDIGO:    '#651FFF',
+          PURPLE:    '#D500F9',
+          MAGENTA:   '#FF4081',
+        },
+      },
+      {
+        id:   'twilight',
+        name: 'Royal Dusk',
+        desc: 'Deep jewel alchemy hues',
+        free: false,
+        swatches: ['#D94A64', '#F0A848', '#487AE0', '#38B27A'],
+        colors: {
+          RED:       '#D94A64',
+          VERMILION: '#E5674A',
+          ORANGE:    '#EB8544',
+          AMBER:     '#F0A848',
+          YELLOW:    '#F5D259',
+          LIME:      '#9ED456',
+          GREEN:     '#38B27A',
+          TEAL:      '#2AA3A8',
+          BLUE:      '#487AE0',
+          INDIGO:    '#6356C7',
+          PURPLE:    '#9D4EDD',
+          MAGENTA:   '#D649A8',
+        },
       },
     ],
   };
@@ -127,10 +250,7 @@ const Economy = (() => {
 
   function _loadBalance() {
     const raw = _readRaw(CONFIG.storageKeys.wallet);
-    if (raw !== null) {
-      return _nonNegInt(raw, 0);
-    }
-    // Migrate legacy hp_coins stub key if present
+    if (raw !== null) return _nonNegInt(raw, 0);
     const legacy = _readRaw(CONFIG.storageKeys.legacyWallet);
     if (legacy !== null) {
       const val = _nonNegInt(legacy, 0);
@@ -161,8 +281,7 @@ const Economy = (() => {
 
   function earn(amount) {
     const delta = Math.max(0, Math.floor(Number(amount) || 0));
-    const cur = getBalance();
-    return setBalance(cur + delta);
+    return setBalance(getBalance() + delta);
   }
 
   function spend(amount) {
@@ -174,6 +293,35 @@ const Economy = (() => {
     return true;
   }
 
+  /* ---------- Highest Level Unlocked ---------- */
+  let _memHighestLevel = 1;
+
+  function getHighestLevel() {
+    const raw = _readRaw(CONFIG.storageKeys.highestLevel);
+    if (raw !== null) {
+      const n = Math.max(1, _nonNegInt(raw, 1));
+      _memHighestLevel = n;
+      return n;
+    }
+    return _memHighestLevel;
+  }
+
+  function setHighestLevel(levelNum) {
+    const n = Math.max(1, Math.floor(Number(levelNum) || 1));
+    const cur = getHighestLevel();
+    const next = Math.max(cur, n);
+    _memHighestLevel = next;
+    _writeRaw(CONFIG.storageKeys.highestLevel, next);
+    return next;
+  }
+
+  function forceHighestLevel(levelNum) {
+    const n = Math.max(1, Math.floor(Number(levelNum) || 1));
+    _memHighestLevel = n;
+    _writeRaw(CONFIG.storageKeys.highestLevel, n);
+    return n;
+  }
+
   /* ---------- Earn Calculations ---------- */
   function calcLevelEarn(opts) {
     const o = opts || {};
@@ -181,10 +329,10 @@ const Economy = (() => {
     const starBonus = o.stars === 3 ? CONFIG.earn.threeStarsBonus : 0;
     const finaleBonus = o.isFinale ? CONFIG.earn.realmFinaleBonus : 0;
     return {
-      win:         win,
-      starBonus:   starBonus,
-      finaleBonus: finaleBonus,
-      total:       win + starBonus + finaleBonus,
+      win,
+      starBonus,
+      finaleBonus,
+      total: win + starBonus + finaleBonus,
     };
   }
 
@@ -193,10 +341,10 @@ const Economy = (() => {
     const base = CONFIG.earn.dailyBase;
     const streakBonus = Math.min(CONFIG.earn.dailyStreakCap, s * CONFIG.earn.dailyStreakPerDay);
     return {
-      base:        base,
-      streakBonus: streakBonus,
-      streak:      s,
-      total:       base + streakBonus,
+      base,
+      streakBonus,
+      streak: s,
+      total: base + streakBonus,
     };
   }
 
@@ -217,7 +365,7 @@ const Economy = (() => {
     const src = saved || _memAdLog || { day: today, count: 0, lastAt: 0 };
     const count = src.day === today ? _nonNegInt(src.count, 0) : 0;
     const lastAt = _nonNegInt(src.lastAt, 0);
-    return { day: today, count: count, lastAt: lastAt };
+    return { day: today, count, lastAt };
   }
 
   function _saveAdLog(entry) {
@@ -237,9 +385,9 @@ const Economy = (() => {
       canWatch:             remainingToday > 0 && cooldownRemainingMs <= 0,
       countToday:           log.count,
       dailyLimit:           limit,
-      remainingToday:       remainingToday,
-      cooldownRemainingMs:  cooldownRemainingMs,
-      cooldownRemainingSec: cooldownRemainingSec,
+      remainingToday,
+      cooldownRemainingMs,
+      cooldownRemainingSec,
       rewardAmount:         CONFIG.earn.rewardedAdCoins,
       lastAt:               log.lastAt,
     };
@@ -255,17 +403,12 @@ const Economy = (() => {
         state:  st,
       };
     }
-    const nextLog = {
-      day:    _localDayStr(now),
-      count:  st.countToday + 1,
-      lastAt: now,
-    };
-    _saveAdLog(nextLog);
+    _saveAdLog({ day: _localDayStr(now), count: st.countToday + 1, lastAt: now });
     const balance = earn(CONFIG.earn.rewardedAdCoins);
     return {
       ok:      true,
       earned:  CONFIG.earn.rewardedAdCoins,
-      balance: balance,
+      balance,
       state:   getRewardedAdState(now),
     };
   }
@@ -292,14 +435,108 @@ const Economy = (() => {
     return true;
   }
 
-  /* ---------- Color Palettes (for Shop) ---------- */
-  let _memPalState = { unlocked: ['classic'], active: 'classic' };
+  /* ---------- Themes (Backgrounds, unlocked by level) ---------- */
+  let _memActiveTheme = 'doodle';
+
+  function _getActiveId(key, items, defId, levelNow) {
+    const raw = _readRaw(key) || defId;
+    const lvl = levelNow !== undefined ? levelNow : getHighestLevel();
+    const found = items.find(it => it.id === raw);
+    if (found && lvl >= found.unlockLevel) return found.id;
+    return items[0].id;
+  }
+
+  function getThemes(levelOpt) {
+    const lvl = levelOpt !== undefined ? levelOpt : getHighestLevel();
+    const activeId = _getActiveId(CONFIG.storageKeys.themes, CONFIG.themes, _memActiveTheme, lvl);
+    _memActiveTheme = activeId;
+    return CONFIG.themes.map(t => ({
+      id:          t.id,
+      name:        t.name,
+      unlockLevel: t.unlockLevel,
+      bgTop:       t.bgTop,
+      bgBot:       t.bgBot,
+      hill1:       t.hill1,
+      hill2:       t.hill2,
+      accent:      t.accent,
+      unlocked:    lvl >= t.unlockLevel,
+      active:      activeId === t.id,
+    }));
+  }
+
+  function getActiveTheme(levelOpt) {
+    const all = getThemes(levelOpt);
+    return all.find(t => t.active) || all[0];
+  }
+
+  function selectTheme(id, levelOpt) {
+    const lvl = levelOpt !== undefined ? levelOpt : getHighestLevel();
+    const found = CONFIG.themes.find(t => t.id === id);
+    if (!found || lvl < found.unlockLevel) return false;
+    _memActiveTheme = found.id;
+    _writeRaw(CONFIG.storageKeys.themes, found.id);
+    return true;
+  }
+
+  /* ---------- Bottles / Tubes (unlocked by level) ---------- */
+  let _memActiveTube = 'classic';
+
+  function getTubes(levelOpt) {
+    const lvl = levelOpt !== undefined ? levelOpt : getHighestLevel();
+    const activeId = _getActiveId(CONFIG.storageKeys.tubes, CONFIG.tubes, _memActiveTube, lvl);
+    _memActiveTube = activeId;
+    return CONFIG.tubes.map(b => ({
+      id:          b.id,
+      name:        b.name,
+      unlockLevel: b.unlockLevel,
+      accent:      b.accent,
+      unlocked:    lvl >= b.unlockLevel,
+      active:      activeId === b.id,
+    }));
+  }
+
+  function getActiveTube(levelOpt) {
+    const all = getTubes(levelOpt);
+    return all.find(b => b.active) || all[0];
+  }
+
+  function selectTube(id, levelOpt) {
+    const lvl = levelOpt !== undefined ? levelOpt : getHighestLevel();
+    const found = CONFIG.tubes.find(b => b.id === id);
+    if (!found || lvl < found.unlockLevel) return false;
+    _memActiveTube = found.id;
+    _writeRaw(CONFIG.storageKeys.tubes, found.id);
+    return true;
+  }
+
+  /* ---------- Unlock Progress Helper (used on Win Screen) ---------- */
+  function getNextUnlock(kind, completedLevelNum) {
+    const list = kind === 'theme' ? CONFIG.themes : CONFIG.tubes;
+    const lvl = Math.max(0, Math.floor(Number(completedLevelNum) || 0));
+    const exactMatch = list.find(item => item.unlockLevel > 1 && item.unlockLevel === lvl);
+    if (exactMatch) {
+      return { item: exactMatch, unlockLevel: exactMatch.unlockLevel, current: lvl, justUnlocked: true };
+    }
+    const upcoming = list.find(item => item.unlockLevel > lvl);
+    if (!upcoming) return null;
+    return { item: upcoming, unlockLevel: upcoming.unlockLevel, current: lvl, justUnlocked: false };
+  }
+
+  /* ---------- Color Palettes (unlocked + 800-coin shop items) ---------- */
+  let _memPalState = { unlocked: ['classic', 'pastel'], active: 'classic' };
+
+  function _defaultUnlockedPaletteIds() {
+    return CONFIG.palettes.filter(p => p.free).map(p => p.id);
+  }
 
   function _loadPaletteState() {
     const saved = _readJSON(CONFIG.storageKeys.palettes, null);
     const raw = saved || _memPalState;
-    const unlocked = Array.isArray(raw.unlocked) ? raw.unlocked.slice() : ['classic'];
-    if (!unlocked.includes('classic')) unlocked.unshift('classic');
+    const baseFree = _defaultUnlockedPaletteIds();
+    const unlocked = Array.isArray(raw.unlocked) ? raw.unlocked.slice() : [];
+    for (let i = 0; i < baseFree.length; i++) {
+      if (!unlocked.includes(baseFree[i])) unlocked.push(baseFree[i]);
+    }
     const active = unlocked.includes(raw.active) ? raw.active : 'classic';
     return { unlocked, active };
   }
@@ -321,6 +558,7 @@ const Economy = (() => {
       desc:     p.desc,
       price:    _palettePrice(p),
       swatches: p.swatches.slice(),
+      colors:   p.colors ? Object.assign({}, p.colors) : null,
       owned:    !!p.free || st.unlocked.includes(p.id),
       active:   st.active === p.id,
     }));
@@ -329,6 +567,19 @@ const Economy = (() => {
   function getActivePalette() {
     const all = getPalettes();
     return all.find(p => p.active) || all[0];
+  }
+
+  function getDisplayHex(colorKey, fallbackHex, paletteIdOpt) {
+    let pal = null;
+    if (paletteIdOpt) {
+      pal = CONFIG.palettes.find(p => p.id === paletteIdOpt) || null;
+    } else {
+      pal = getActivePalette();
+    }
+    if (pal && pal.colors && pal.colors[colorKey]) {
+      return pal.colors[colorKey];
+    }
+    return fallbackHex;
   }
 
   function selectPalette(id) {
@@ -367,13 +618,24 @@ const Economy = (() => {
     canAfford,
     earn,
     spend,
+    getHighestLevel,
+    setHighestLevel,
+    forceHighestLevel,
     calcLevelEarn,
     calcDailyEarn,
     getRewardedAdState,
     recordRewardedAdCoinClaim,
     canShowInterstitial,
+    getThemes,
+    getActiveTheme,
+    selectTheme,
+    getTubes,
+    getActiveTube,
+    selectTube,
+    getNextUnlock,
     getPalettes,
     getActivePalette,
+    getDisplayHex,
     selectPalette,
     buyPalette,
   };
