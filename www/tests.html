@@ -107,17 +107,19 @@
 <h2>Log</h2>
 <div id="log"></div>
 
-<h2>4. Stuck Rescue — Level Config Checks (?forcestuck=1 flags: 1, 16, 51, 101)</h2>
+<h2>4. Starting Empty-Tube Audit (Levels 1–200) &amp; Extra "+" Slot Report</h2>
+<div class="banner" id="empty-summary">Pending…</div>
 <div class="banner" id="stuck-summary">Pending…</div>
 <table id="stuck-table">
   <thead>
     <tr>
       <th>Level</th>
       <th>Realm</th>
-      <th>Tubes</th>
-      <th>Par</th>
-      <th>Max extra</th>
-      <th>Cost rule</th>
+      <th>Base Tubes</th>
+      <th>Empty at Start</th>
+      <th>Extras Allowed</th>
+      <th>Cost Label</th>
+      <th>Slots / Rows (No Orphan)</th>
       <th>Status</th>
     </tr>
   </thead>
@@ -218,6 +220,10 @@ function runProgressionAndMilestoneChecks() {
   for (let lvl = 1; lvl <= 250; lvl++) {
     const cfg = getLevelConfig(lvl);
     if (cfg.targetColors.length !== cfg.targets) errs.push('L' + lvl + ': targetColors length mismatch');
+    const expectedSpare = lvl <= 30 ? 2 : 1;
+    if (cfg.emptyTubes !== Math.min(expectedSpare, MAX_TUBES - cfg.targets)) {
+      errs.push('L' + lvl + ': spare tubes mismatch (got ' + cfg.emptyTubes + ')');
+    }
     if (cfg.targets + cfg.emptyTubes > MAX_TUBES) errs.push('L' + lvl + ': tubes > 14');
     if (cfg.realmIndex === 4) {
       const tCnt = cfg.targetColors.filter(c => tertSet.has(c)).length;
@@ -418,115 +424,120 @@ async function runTests() {
 window.addEventListener('load', () => { runTests(); runStuckTests(); });
 
 /* ===================================================================
-   STUCK RESCUE SYSTEM TESTS
+   STARTING EMPTY-TUBE AUDIT & EXTRA "+" SLOT / STUCK TESTS
    =================================================================== */
+function _calcRowSplit(slots) {
+  if (slots <= 7) return [slots];
+  const r1 = Math.ceil(slots / 2);
+  return [r1, slots - r1];
+}
+
 function runStuckTests() {
-  const STUCK_LEVELS = [1, 16, 51, 101];
-  const tbody = document.getElementById('stuck-body');
-  const sumEl = document.getElementById('stuck-summary');
+  const REPORT_LEVELS = [1, 6, 16, 17, 18, 19, 31, 51, 101];
+  const tbody   = document.getElementById('stuck-body');
+  const sumEl   = document.getElementById('stuck-summary');
+  const emptyEl = document.getElementById('empty-summary');
   if (!tbody || !sumEl) return;
   tbody.innerHTML = '';
   let allOk = true;
 
-  // 1. Level-specific configs (1, 16, 51, 101) + adding extra tube preserves solvability/limits
-  STUCK_LEVELS.forEach(function(lvl) {
+  // 1. Levels 1-200 audit: count no-empty starts vs fallbacks & list first 10 fallback levels
+  let noEmptyCount = 0;
+  let fallbackCount = 0;
+  const first10Fallbacks = [];
+  for (let lvl = 1; lvl <= 200; lvl++) {
+    const lv = generateLevel(lvl, undefined, { quiet: true });
+    const emp = lv.emptyAtStart !== undefined ? lv.emptyAtStart : countEmptyTubes(lv.tubes);
+    const replayOk = replayMoves(lv.tubes, lv.forwardMoves, lv.target).success;
+    const freeOk = hasFreeTubeSpace(lv.tubes);
+    const movesOk = countLegalMoves(lv.tubes) >= 2;
+    if (!replayOk || !freeOk || !movesOk || emp > 1) allOk = false;
+    if (!lv.usedEmptyFallback && emp === 0) noEmptyCount++;
+    else {
+      fallbackCount++;
+      if (first10Fallbacks.length < 10) first10Fallbacks.push(lvl);
+    }
+  }
+  if (emptyEl) {
+    emptyEl.className = 'banner ' + (allOk ? 'ok' : 'bad');
+    emptyEl.textContent =
+      'Levels 1–200: ' + noEmptyCount + '/200 started with no empty tube · ' +
+      fallbackCount + '/200 needed 1-empty fallback' +
+      (first10Fallbacks.length ? ' (first fallbacks: ' + first10Fallbacks.join(', ') + ')' : ' (none)');
+  }
+  log('\n=== LEVELS 1–200 EMPTY AUDIT: noEmpty=' + noEmptyCount + '/200, fallback=' +
+      fallbackCount + '/200, first10Fallbacks=[' + first10Fallbacks.join(', ') + '] ===');
+
+  // 2. Report for levels 1, 6, 16, 17, 18, 19, 31, 51, 101
+  REPORT_LEVELS.forEach(function(lvl) {
     const cfg = getLevelConfig(lvl);
     const lv  = generateLevel(lvl, undefined, { quiet: true });
+    const realm = cfg ? cfg.realmIndex : 1;
+    const baseTubes = lv.tubes.length;
+    const emptyAtStart = lv.emptyAtStart !== undefined ? lv.emptyAtStart : countEmptyTubes(lv.tubes);
+    const extrasAllowed = Math.min(2, MAX_TUBES - baseTubes);
+    const costLabel = realm <= 2 ? 'FREE / AD or 100' : 'AD or 100';
 
-    const realm     = cfg ? cfg.realmIndex : 1;
-    const realmOk   = (realm >= 1 && realm <= 10);
-    const maxExtra  = realm <= 5 ? 1 : 2;
-    const tubeCount = lv.tubes.length;
-    const tubeOk    = (tubeCount >= 2 && tubeCount <= 14 && (tubeCount + maxExtra) <= 14);
-    const par       = lv.par;
-    const parOk     = (par > 0);
-    const forcedRes = StuckDetect.checkFastConditions({
-      tubes: lv.tubes, target: lv.target, par, moveCount: 0,
-      restartCount: 0, lastProgressTime: Date.now(), now: Date.now(), forceStuck: true,
-    });
-    const forcedOk = !!(forcedRes && forcedRes.stuck === true && forcedRes.reason === 'forced');
+    // Check slot layouts across 0, 1, and 2 extras: never an orphan tube on row 2
+    let noOrphanOk = true;
+    const slotSummaries = [];
+    for (let e = 0; e <= extrasAllowed; e++) {
+      const realNow = baseTubes + e;
+      const hasPlus = e < extrasAllowed;
+      const s = realNow + (hasPlus ? 1 : 0);
+      const split = _calcRowSplit(s);
+      if (split.length === 2 && split[1] <= 1) noOrphanOk = false;
+      slotSummaries.push(s + ' (' + split.join('+') + ')');
+    }
 
-    // Verify 5-move guard blocks early moves (moves 1..5)
-    const guardRes = StuckDetect.checkFastConditions({
-      tubes: lv.tubes, target: lv.target, par, moveCount: 5,
-      restartCount: 2, lastProgressTime: 0, now: Date.now(), forceStuck: false,
-    });
-    const guardOk = !!(guardRes && guardRes.stuck === false);
-
-    // Verify replay with added extra empty tube still wins cleanly with identical forwardMoves
+    // Verify replay still works with an added empty tube
     const withExtra = cloneTubes(lv.tubes);
     withExtra.push([]);
     const extraReplayOk = replayMoves(withExtra, lv.forwardMoves, lv.target).success;
 
-    const rowOk = realmOk && tubeOk && parOk && forcedOk && guardOk && extraReplayOk;
+    const rowOk = baseTubes <= MAX_TUBES && extrasAllowed === 2 && emptyAtStart <= 1 &&
+                  countLegalMoves(lv.tubes) >= 2 && hasFreeTubeSpace(lv.tubes) &&
+                  noOrphanOk && extraReplayOk;
     if (!rowOk) allOk = false;
 
-    const costStr = lvl <= 10 ? 'Free (auto)' : realm <= 2 ? '1st free' : 'ad / 100 coins';
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td>' + lvl + '</td>' +
       '<td>' + (cfg ? cfg.realmName : '?') + ' (' + realm + ')</td>' +
-      '<td>' + tubeCount + '</td>' +
-      '<td>' + par + '</td>' +
-      '<td>max ' + maxExtra + '</td>' +
-      '<td>' + costStr + '</td>' +
+      '<td>' + baseTubes + '</td>' +
+      '<td>' + emptyAtStart + '</td>' +
+      '<td>' + extrasAllowed + '</td>' +
+      '<td>' + costLabel + '</td>' +
+      '<td>' + slotSummaries.join(' → ') + '</td>' +
       '<td class="' + (rowOk ? 'pass' : 'fail') + '">' + (rowOk ? '✓ OK' : '✗ FAIL') + '</td>';
     tbody.appendChild(tr);
   });
 
-  // 2. Verify all 5 stuck conditions (a..e) and solver timeout => unknown (null)
+  // 3. Verify stuck conditions (a) no legal move, (b) proven unsolvable, timeout => unknown
   const deadEndTubes = [
     ['RED', 'BLUE', 'YELLOW', 'GREEN'],
     ['YELLOW', 'RED', 'BLUE', 'ORANGE'],
   ];
-  const condA = StuckDetect.checkFastConditions({
-    tubes: deadEndTubes, target: ['ORANGE'], par: 5, moveCount: 6,
-    restartCount: 0, lastProgressTime: Date.now(), now: Date.now(), forceStuck: false,
-  });
-  const condAOk = !!(condA && condA.stuck === true && condA.reason === 'no-legal-move');
+  const condA = StuckDetect.checkFastConditions({ tubes: deadEndTubes });
+  const condAOk = !!(condA && condA.stuck === true && condA.status === 'yes');
 
-  // Condition (b): legal move exists (RED <-> empty/RED), but cannot make ORANGE -> proven unsolvable
   const softLockTubes = [['RED', 'RED'], ['RED', 'RED'], []];
   const solveUn = checkSolvability(softLockTubes, ['ORANGE'], 30000, 150);
   const condB   = StuckDetect.interpretSolverResult(solveUn);
-  const condBOk = (solveUn.status === 'unsolvable' && condB.stuck === true && condB.reason === 'unsolvable');
+  const condBOk = (solveUn.status === 'unsolvable' && condB.stuck === true && condB.status === 'yes');
 
-  // Condition (b) timeout / node-capped -> unknown (null), NOT stuck!
   const l101 = generateLevel(101, undefined, { quiet: true });
   const solveCap = checkSolvability(l101.tubes, l101.target, 25, 150);
   const capRes   = StuckDetect.interpretSolverResult(solveCap);
-  const capOk    = (capRes.stuck === null);
+  const capOk    = (capRes.stuck === false && capRes.status === 'unknown');
 
-  // Condition (c): 2 restarts after >5 moves
-  const condC = StuckDetect.checkFastConditions({
-    tubes: l101.tubes, target: l101.target, par: l101.par, moveCount: 6,
-    restartCount: 2, lastProgressTime: Date.now(), now: Date.now(), forceStuck: false,
-  });
-  const condCOk = !!(condC && condC.stuck === true && condC.reason === 'restarts');
-
-  // Condition (d): moves > 2.5 * par
-  const condD = StuckDetect.checkFastConditions({
-    tubes: l101.tubes, target: l101.target, par: 10, moveCount: 26,
-    restartCount: 0, lastProgressTime: Date.now(), now: Date.now(), forceStuck: false,
-  });
-  const condDOk = !!(condD && condD.stuck === true && condD.reason === 'over-par');
-
-  // Condition (e): 60s with no progress after >= 10 moves
-  const nowMs = Date.now();
-  const condE = StuckDetect.checkFastConditions({
-    tubes: l101.tubes, target: l101.target, par: 30, moveCount: 10,
-    restartCount: 0, lastProgressTime: nowMs - 61000, now: nowMs, forceStuck: false,
-  });
-  const condEOk = !!(condE && condE.stuck === true && condE.reason === 'no-progress');
-
-  allOk = allOk && condAOk && condBOk && capOk && condCOk && condDOk && condEOk;
-  log('Stuck rescue checks: (a)=' + condAOk + ' (b)=' + condBOk + ' (cap=>null)=' + capOk +
-      ' (c)=' + condCOk + ' (d)=' + condDOk + ' (e)=' + condEOk);
+  allOk = allOk && condAOk && condBOk && capOk;
+  log('Stuck solver checks: (a) no-legal=' + condAOk + ', (b) unsolvable=' + condBOk + ', cap=>unknown=' + capOk);
 
   sumEl.className = 'banner ' + (allOk ? 'ok' : 'bad');
   sumEl.textContent = (allOk
-    ? '✓ Stuck rescue: levels 1, 16, 51, 101 & all 5 conditions passed'
-    : '✗ Stuck rescue: some checks failed');
+    ? '✓ All 9 report levels (no orphans), 1–200 empty-tube audit, and stuck detection checks passed'
+    : '✗ Extra slot / stuck rescue checks failed');
   return allOk;
 }
 </script>

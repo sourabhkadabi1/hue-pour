@@ -489,9 +489,8 @@ const getLevelConfig = (() => {
     const targets = targetsForLevel(realm, lvl);
     const colorPool = poolForRealm(realm);
 
-    // Empty tubes: 3 for intro, 2 normally, +1 on breather (capped so total tubes <= 14)
-    let emptyTubes = isIntro ? 3 : 2;
-    if (isBreather) emptyTubes += 1;
+    // Spare tubes beyond target count: 2 for levels 1-30, 1 from level 31 onward.
+    let emptyTubes = lvl <= 30 ? 2 : 1;
     emptyTubes = Math.max(1, Math.min(emptyTubes, 14 - targets));
 
     // Smooth scramble ramp: ~60% of realm max at start -> 100% at end; wave growth in Endless
@@ -505,6 +504,9 @@ const getLevelConfig = (() => {
       scrambleDepth = maxS;
     } else if (isBreather) {
       scrambleDepth = Math.max(4, Math.round(scrambleDepth * 0.7));
+    } else if (isIntro) {
+      // Intro levels (first 3 of each realm) stay easier via shorter scramble depth
+      scrambleDepth = Math.max(4, Math.round(scrambleDepth * 0.75));
     }
 
     const blockKey = isEndless ? (10 + wave) : realm.index;

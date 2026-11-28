@@ -675,10 +675,55 @@ function drawTubeOnCtx(ctx, cx, cy, w, h, angle, bands, waveState, opts) {
   ctx.restore(); // end rotation
 }
 
+/**
+ * Draw the dashed-outline empty "+" tube slot at the exact same dimensions
+ * and proportions (square top, semicircular bottom) as real glass tubes.
+ */
+function drawPlusSlotOnCtx(ctx, cx, cy, w, h, isStuck) {
+  const left = cx - w / 2;
+  const top  = cy - h;
+  const strokeW = Math.max(1.5, w * 0.05);
+  const r = w / 2;
+
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.lineWidth = strokeW;
+  ctx.strokeStyle = isStuck ? 'rgba(79, 195, 247, 0.95)' : 'rgba(207, 207, 207, 0.65)';
+  ctx.setLineDash([Math.max(4, w * 0.11), Math.max(3, w * 0.09)]);
+
+  // Open-mouth dashed U-tube outline (matches real tubes)
+  ctx.beginPath();
+  ctx.moveTo(left, top);
+  ctx.lineTo(left, top + h - r);
+  ctx.arcTo(left, top + h, left + r, top + h, r);
+  ctx.arcTo(left + w, top + h, left + w, top + h - r, r);
+  ctx.lineTo(left + w, top);
+  ctx.stroke();
+
+  // Centered "+" vector icon in upper-mid interior (above cost/left badges)
+  ctx.setLineDash([]);
+  const plusSize = Math.max(6, w * 0.22);
+  const plusCy = top + h * 0.40;
+  ctx.lineWidth = Math.max(2, w * 0.065);
+  ctx.strokeStyle = isStuck ? '#8ce0ff' : 'rgba(255, 255, 255, 0.78)';
+  ctx.beginPath();
+  ctx.moveTo(cx - plusSize, plusCy);
+  ctx.lineTo(cx + plusSize, plusCy);
+  ctx.moveTo(cx, plusCy - plusSize);
+  ctx.lineTo(cx, plusCy + plusSize);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
 /* ===================================================================
    ANIMATION STATE
    =================================================================== */
 let _tubeEls  = [];        // [{wrapper, canvas, ctx}]
+let _plusEl   = null;      // {wrapper, canvas, ctx, costEl, leftEl, tooltipEl}
+let _renderedSlots = 0;
+let _hasRenderedPlus = false;
 let _tubeW    = 55;
 let _tubeH    = 204;
 let _tubePadX = 10;
@@ -1116,37 +1161,39 @@ function _initOverlay() {
 function _computeTubeSize(n) {
   const area = document.getElementById('tube-area');
   if (!area) return;
-  const colW = Math.min(480, area.clientWidth);
+  const colW = Math.min(480, area.clientWidth || window.innerWidth || 360);
   const availW = Math.max(200, colW - 24);
-  const aH = area.clientHeight - 16;
+  const aH = (area.clientHeight || 500) - 16;
 
-  // Up to 5 tubes per row for <= 10 tubes; for 11-14 tubes use 2 rows of up to 7
-  const rows = n <= 5 ? 1 : 2;
-  const cols = n <= 5 ? n : Math.ceil(n / 2);
+  // Layout rules:
+  //   1..7 slots -> 1 row (shrunk to fit width)
+  //   8..14 slots -> 2 rows, row 1 gets ceil(n/2) so no orphan tube ever appears
+  const count = Math.max(1, n || 1);
+  const rows = count <= 7 ? 1 : 2;
+  const cols = count <= 7 ? count : Math.ceil(count / 2);
   const padX = cols >= 6 ? 6 : 10;
-  const gapFrac = cols >= 6 ? 0.24 : (cols === 5 ? 0.40 : 0.56);
-  const rowGapFrac = rows === 2 ? (cols >= 6 ? 0.50 : 0.70) : 0.60;
+  const gapFrac = cols >= 7 ? 0.16 : (cols === 6 ? 0.22 : (cols === 5 ? 0.36 : 0.50));
+  const rowGapFrac = rows === 2 ? (cols >= 6 ? 0.42 : 0.58) : 0.60;
 
-  let w = Math.max(24, Math.round(colW * (cols >= 6 ? 0.105 : 0.115)));
+  let w = Math.max(20, Math.round(colW * (cols >= 6 ? 0.105 : 0.115)));
 
-  // Constrain horizontally so `cols` tubes fit on each row cleanly
+  // Constrain horizontally so `cols` slots fit cleanly on one row
   const maxWForCols = Math.floor((availW - cols * padX - 2) / (cols + (cols - 1) * gapFrac));
   if (maxWForCols > 0 && w > maxWForCols) {
-    w = Math.max(20, maxWForCols);
+    w = Math.max(18, maxWForCols);
   }
 
-  // Constrain vertically while maintaining height = 3.7 * width
+  // Constrain vertically while keeping exact height = 3.7 * width
   if (aH > 0) {
     const maxHForRows = Math.floor((aH - rows * 14) / (rows + (rows - 1) * rowGapFrac));
     const maxWForRows = Math.floor(maxHForRows / 3.7);
     if (maxWForRows > 0 && w > maxWForRows) {
-      w = Math.max(20, maxWForRows);
+      w = Math.max(18, maxWForRows);
     }
   }
 
   let GAP = Math.max(4, Math.round(w * gapFrac));
-  // Fine-tune width so exact row width never triggers accidental wrap
-  while (w > 20 && (cols * (w + padX) + (cols - 1) * GAP) > availW) {
+  while (w > 18 && (cols * (w + padX) + (cols - 1) * GAP) > availW) {
     w--;
     GAP = Math.max(4, Math.round(w * gapFrac));
   }
@@ -1158,6 +1205,7 @@ function _computeTubeSize(n) {
 
   document.documentElement.style.setProperty('--tube-w', _tubeW + 'px');
   document.documentElement.style.setProperty('--tube-h', _tubeH + 'px');
+  document.documentElement.style.setProperty('--tube-pad-x', _tubePadX + 'px');
   document.documentElement.style.setProperty('--tube-gap', GAP + 'px');
   document.documentElement.style.setProperty('--row-gap', (rows > 1 ? rowGap : GAP) + 'px');
 }
@@ -1196,10 +1244,71 @@ function _redrawBands(ti, bands) {
   });
 }
 
-function _buildTubeDOM() {
+function _redrawPlusSlot() {
+  if (!_plusEl || !_plusEl.ctx) return;
+  const ctx = _plusEl.ctx;
+  const cW = _tubeW + _tubePadX, cH = _tubeH + 14;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cW, cH);
+  const cx = cW / 2, cy = _tubeH + 7;
+  const pulsing = _isPlusPulsing();
+  drawPlusSlotOnCtx(ctx, cx, cy, _tubeW, _tubeH, pulsing);
+}
+
+function _buildPlusSlotEl() {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tube-wrapper tube-plus-slot';
+  wrapper.setAttribute('role', 'button');
+  wrapper.setAttribute('aria-label', 'Add extra tube');
+  wrapper.addEventListener('click', _onAddPlusTube);
+
+  const tooltipEl = document.createElement('div');
+  tooltipEl.className = 'plus-stuck-tooltip';
+  tooltipEl.textContent = 'Need room? Tap +';
+  wrapper.appendChild(tooltipEl);
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'tube-canvas';
+  wrapper.appendChild(canvas);
+
+  const meta = document.createElement('div');
+  meta.className = 'plus-slot-meta';
+  const costEl = document.createElement('span');
+  costEl.className = 'plus-cost-badge';
+  const leftEl = document.createElement('span');
+  leftEl.className = 'plus-left-badge';
+  meta.appendChild(costEl);
+  meta.appendChild(leftEl);
+  wrapper.appendChild(meta);
+
+  const ctx = _setupTubeCanvas(canvas);
+  return { wrapper, canvas, ctx, costEl, leftEl, tooltipEl };
+}
+
+function _buildTubeDOM(policy) {
   const area = document.getElementById('tube-area');
+  if (!area) return;
   area.innerHTML = '';
   _tubeEls = [];
+  _plusEl = null;
+
+  const realCount = _st.tubes.length;
+  const showPlus = !!(policy && policy.hasPlusSlot);
+  const slots = realCount + (showPlus ? 1 : 0);
+  const rows = slots <= 7 ? 1 : 2;
+  const row1Limit = rows === 1 ? slots : Math.ceil(slots / 2);
+
+  const row1 = document.createElement('div');
+  row1.className = 'tube-row';
+  area.appendChild(row1);
+  let row2 = null;
+  if (rows === 2) {
+    row2 = document.createElement('div');
+    row2.className = 'tube-row';
+    area.appendChild(row2);
+  }
+
   _st.tubes.forEach((_, ti) => {
     const wrapper = document.createElement('div');
     wrapper.className = 'tube-wrapper';
@@ -1210,24 +1319,87 @@ function _buildTubeDOM() {
     const canvas = document.createElement('canvas');
     canvas.className = 'tube-canvas';
     wrapper.appendChild(canvas);
-    area.appendChild(wrapper);
+    (ti < row1Limit ? row1 : row2).appendChild(wrapper);
 
     const ctx = _setupTubeCanvas(canvas);
     _tubeEls.push({ wrapper, canvas, ctx });
   });
+
+  if (showPlus) {
+    _plusEl = _buildPlusSlotEl();
+    const plusParent = realCount < row1Limit ? row1 : row2;
+    plusParent.appendChild(_plusEl.wrapper);
+  }
+
+  _renderedSlots = slots;
+  _hasRenderedPlus = showPlus;
 }
 
-function _renderTubesAll() {
-  if (!_tubeEls.length || _tubeEls.length !== _st.tubes.length) {
-    _computeTubeSize(_st.tubes.length);
-    _buildTubeDOM();
-  } else {
-    _computeTubeSize(_st.tubes.length);
-    _tubeEls.forEach(el => {
-      const ctx = _setupTubeCanvas(el.canvas);
-      el.ctx = ctx;
-    });
+function _applyFlipReflow(prevRects, popIdx) {
+  if (_reducedMotion()) return;
+  if (prevRects && prevRects.tubes) {
+    const nFlip = Math.min(prevRects.tubes.length, _tubeEls.length);
+    for (let i = 0; i < nFlip; i++) {
+      if (i === popIdx) continue;
+      const oldR = prevRects.tubes[i];
+      const w = _tubeEls[i] && _tubeEls[i].wrapper;
+      if (!oldR || !w || !w.getBoundingClientRect) continue;
+      const newR = w.getBoundingClientRect();
+      if (!newR || !newR.width || !oldR.width) continue;
+      const dx = oldR.left - newR.left;
+      const dy = oldR.top - newR.top;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+      w.style.transition = 'none';
+      w.style.transform = 'translate(' + dx.toFixed(1) + 'px,' + dy.toFixed(1) + 'px)';
+      void w.offsetWidth;
+      w.style.transition = '';
+      w.style.transform = '';
+    }
+    if (_plusEl && prevRects.plus && _plusEl.wrapper.getBoundingClientRect) {
+      const oldP = prevRects.plus;
+      const newP = _plusEl.wrapper.getBoundingClientRect();
+      if (newP && oldP && newP.width && oldP.width) {
+        const dx = oldP.left - newP.left;
+        const dy = oldP.top - newP.top;
+        if (Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5) {
+          const pw = _plusEl.wrapper;
+          pw.style.transition = 'none';
+          pw.style.transform = 'translate(' + dx.toFixed(1) + 'px,' + dy.toFixed(1) + 'px)';
+          void pw.offsetWidth;
+          pw.style.transition = '';
+          pw.style.transform = '';
+        }
+      }
+    }
   }
+
+  if (popIdx !== undefined && popIdx >= 0 && _tubeEls[popIdx]) {
+    const popW = _tubeEls[popIdx].wrapper;
+    popW.classList.add('tube-pop-in');
+    const clearPop = () => popW.classList.remove('tube-pop-in');
+    popW.addEventListener('animationend', clearPop, { once: true });
+    if (_popInTimer) clearTimeout(_popInTimer);
+    _popInTimer = setTimeout(() => { _popInTimer = null; clearPop(); }, 440);
+  }
+}
+
+function _renderTubesAll(opts) {
+  const policy = _getExtraPolicy();
+  const slots = policy.slots;
+  const needsRebuild = !_tubeEls.length ||
+    _tubeEls.length !== _st.tubes.length ||
+    _renderedSlots !== slots ||
+    _hasRenderedPlus !== policy.hasPlusSlot ||
+    (opts && opts.forceRebuild);
+
+  _computeTubeSize(slots);
+  if (needsRebuild) {
+    _buildTubeDOM(policy);
+  } else {
+    _tubeEls.forEach(el => { el.ctx = _setupTubeCanvas(el.canvas); });
+    if (_plusEl) _plusEl.ctx = _setupTubeCanvas(_plusEl.canvas);
+  }
+
   _st.tubes.forEach((_, ti) => {
     if (_anim && ti === _anim.si) return;
     _redrawTube(ti);
@@ -1236,6 +1408,13 @@ function _renderTubesAll() {
     wrapper.classList.toggle('hint-src',  !!(_st.hintMove && ti === _st.hintMove.src));
     wrapper.classList.toggle('hint-dst',  !!(_st.hintMove && ti === _st.hintMove.dst));
   });
+
+  _updatePlusSlotVisual(policy);
+
+  if (opts && (opts.prevRects || opts.popIdx !== undefined)) {
+    _applyFlipReflow(opts.prevRects, opts.popIdx);
+  }
+  _updateDebugTubesOverlay(policy);
 }
 
 /* ===================================================================
@@ -1333,20 +1512,16 @@ let _st = {
   _currentSeed: 0, _currentDiff: 1,
   _winCode: '', _winStars: 1,
   _jumpLevel: 0, _forcedSeed: undefined,
-  // ---- stuck rescue state ----
-  stuckDetected:     false,
-  extraTubesAdded:   0,
-  usedExtraTube:     false,
-  restartCount:      0,
-  _nextRestartCount: 0,
-  bestProgressScore: -Infinity,
-  lastProgressTime:  0,
-  movesAtLastRescue: 0,
-  _forceStuck:       false,
-  _addingTube:       false,
-  _hiddenAt:         0,
-  _stuckCheckSeq:    0,
-  _levelConfig:      null,
+  // ---- extra "+" slot & stuck state ----
+  stuckStatus:      'unknown',  // 'yes' | 'no' | 'unknown'
+  extraTubesAdded:  0,
+  usedExtraTube:    false,
+  emptyAtStart:     0,
+  _forceStuck:      false,
+  _debugTubes:      false,
+  _addingTube:      false,
+  _stuckCheckSeq:   0,
+  _levelConfig:     null,
 };
 
 let _settings = { sound: true, haptics: true, colorblind: false, reduceEffects: false, volume: 0.65 };
@@ -1416,12 +1591,7 @@ const dom = {
   winStarfield:     $('win-starfield'),
   winExtraBadge:    $('win-extra-badge'),
   dailyExtraBadge:  $('daily-extra-badge'),
-  // stuck rescue
-  stuckBanner:      $('stuck-banner'),
-  stuckMsg:         $('stuck-banner-msg'),
-  btnAddTube:       $('btn-add-tube'),
-  btnAddTubeCoins:  $('btn-add-tube-coins'),
-  btnDismissStuck:  $('btn-dismiss-stuck'),
+  debugTubesOverlay:$('debug-tubes-overlay'),
 };
 
 /* ---- init ---- */
@@ -1436,14 +1606,7 @@ function _init() {
   _initBg();
   _updateProgress();
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      _st._hiddenAt = Date.now();
-    } else if (_st._hiddenAt > 0) {
-      if (_st.lastProgressTime > 0) {
-        _st.lastProgressTime += (Date.now() - _st._hiddenAt);
-      }
-      _st._hiddenAt = 0;
-    }
+    if (document.hidden) { /* pause idle */ }
   });
   window.addEventListener('resize', () => {
     _initOverlay();
@@ -1458,26 +1621,42 @@ function _parseURL() {
   if (p.has('level')) { const n=parseInt(p.get('level'),10); if(n>0){_st.levelNum=n;_st._jumpLevel=n;} }
   if (p.has('seed')) _st._forcedSeed = parseInt(p.get('seed'),10);
   if (p.has('slowmo')) _slowmo = parseFloat(p.get('slowmo')) || 1.0;
-  if (p.get('debug') === 'levels') _debugPrintLevels();
+  const dbg = p.get('debug');
+  if (dbg === 'levels') _debugPrintLevels();
+  if (dbg === 'tubes') _st._debugTubes = true;
   if (p.get('forcestuck') === '1') _st._forceStuck = true;
 }
 
 function _debugPrintLevels() {
   const rows = [];
+  let noEmptyCount = 0;
+  let fallbackCount = 0;
+  const first10Fallbacks = [];
   for (let lvl = 1; lvl <= 200; lvl++) {
     const lv = generateLevel(lvl, undefined, { quiet: true });
     const cfg = lv.config || (typeof getLevelConfig === 'function' ? getLevelConfig(lvl) : null);
+    const emptyAtStart = lv.emptyAtStart !== undefined ? lv.emptyAtStart : lv.tubes.filter(t => !t.length).length;
+    const isFallback = !!(lv.usedEmptyFallback || emptyAtStart > 0);
+    if (!isFallback) noEmptyCount++;
+    else {
+      fallbackCount++;
+      if (first10Fallbacks.length < 10) first10Fallbacks.push(lvl);
+    }
     rows.push({
-      level:   lvl,
-      realm:   cfg ? cfg.realmName : '—',
-      targets: lv.target.length,
-      colors:  lv.target.map(c => COLOR_INFO[c] ? COLOR_INFO[c].name : c).join(', '),
-      tubes:   lv.tubes.length,
-      par:     lv.par,
+      level:        lvl,
+      realm:        cfg ? cfg.realmName : '—',
+      targets:      lv.target.length,
+      colors:       lv.target.map(c => COLOR_INFO[c] ? COLOR_INFO[c].name : c).join(', '),
+      tubes:        lv.tubes.length,
+      emptyAtStart: emptyAtStart,
+      fallback:     isFallback ? 'yes' : 'no',
+      par:          lv.par,
     });
   }
   if (console.table) console.table(rows);
   else console.log(rows);
+  console.log('Levels 1-200: no empty tube = ' + noEmptyCount + '/200, needed fallback = ' + fallbackCount + '/200');
+  console.log('First 10 fallback levels:', first10Fallbacks);
 }
 
 function _loadSave() {
@@ -1551,12 +1730,6 @@ function _bindEvents() {
   });
   dom.btnCloseSettings.addEventListener('click', () => { _showOverlay(dom.settingsOverlay,false); _persist(); });
   document.addEventListener('pointerdown', e => { if (e.target.closest('button')) Sound.btnClick(); });
-  // stuck rescue
-  dom.btnAddTube.addEventListener('click',      () => _onAddTube('primary'));
-  if (dom.btnAddTubeCoins) {
-    dom.btnAddTubeCoins.addEventListener('click', () => _onAddTube('coins'));
-  }
-  dom.btnDismissStuck.addEventListener('click', _hideStuckBanner);
 }
 
 function _showOverlay(el, show) {
@@ -1591,8 +1764,7 @@ function _goHome() {
   _comboCount = 0; _lastFuse = false;
   document.body.style.transform = '';
   _stopStuckActivity();
-  _st.restartCount = 0;
-  _st._nextRestartCount = 0;
+  if (dom.debugTubesOverlay) dom.debugTubesOverlay.classList.add('hidden');
   dom.app.classList.add('hidden');
   dom.homeScreen.classList.remove('hidden');
   _showOverlay(dom.winOverlay, false);
@@ -1611,45 +1783,48 @@ function _showGame(title) {
   _startRaf();
 }
 
-/* ---- start modes ---- */
-function _startLevel(num) {
-  _st.mode = 'level'; _st.levelNum = num; _st.won = false;
-  _st.moveCount = 0; _st.history = []; _st.selectedTube = -1;
+/** Shared session initializer used across Campaign, Daily, and Challenge modes. */
+function _initPlaySession(lv, config, title) {
+  _st.won = false; _st.moveCount = 0; _st.history = []; _st.selectedTube = -1;
   _st.animating = false; _st.undosLeft = _st.FREE_UNDOS; _st.hintMove = null;
   _waves = {}; _anim = null;
   if (_movesTimer) { clearInterval(_movesTimer); _movesTimer = null; }
-  _showOverlay(dom.winOverlay, false);
-  const seed = _st._forcedSeed !== undefined ? _st._forcedSeed : undefined;
-  const lv = generateLevel(num, seed);
   _st.tubes = lv.tubes; _st.target = lv.target; _st.par = lv.par;
   _st.initialTubes = cloneTubes(lv.tubes);
   _st.forwardMoves = lv.forwardMoves || [];
-  _st._levelConfig = lv.config || (typeof getLevelConfig === 'function' ? getLevelConfig(num) : null);
-  _st._currentSeed = lv.seed; _st._currentDiff = lv.target.length;
+  _st._levelConfig = config;
+  _st.emptyAtStart = lv.emptyAtStart !== undefined
+    ? lv.emptyAtStart
+    : countEmptyTubes(lv.tubes);
+  _st._currentSeed = lv.seed;
+  _st._currentDiff = lv.target.length;
   _resetStuckState();
-  const title = _st._levelConfig ? ('Lv ' + num + ' · ' + _st._levelConfig.realmName) : ('Level ' + num);
   _showGame(title);
-  _renderAll(); _persist(); _maybeStartTut(num);
-  _scheduleStuckCheck({ initialCheck: true });
+  _renderAll();
+  _updatePlusSlotVisual();
+  _updateDebugTubesOverlay();
+}
+
+/* ---- start modes ---- */
+function _startLevel(num) {
+  _st.mode = 'level'; _st.levelNum = num;
+  _showOverlay(dom.winOverlay, false);
+  const seed = _st._forcedSeed !== undefined ? _st._forcedSeed : undefined;
+  const lv = generateLevel(num, seed);
+  const cfg = lv.config || (typeof getLevelConfig === 'function' ? getLevelConfig(num) : null);
+  const title = cfg ? ('Lv ' + num + ' · ' + cfg.realmName) : ('Level ' + num);
+  _initPlaySession(lv, cfg, title);
+  _persist();
+  _maybeStartTut(num);
 }
 
 function _startDaily() {
   const ts = _todayStr();
   if (_daily.results[ts]) { _showDailyDone(_daily.results[ts]); return; }
-  _st.mode = 'daily'; _st.won = false; _st.moveCount = 0; _st.history = [];
-  _st.selectedTube = -1; _st.animating = false; _st.undosLeft = _st.FREE_UNDOS; _st.hintMove = null;
-  _waves = {}; _anim = null;
-  if (_movesTimer) { clearInterval(_movesTimer); _movesTimer = null; }
+  _st.mode = 'daily';
   const lv = generateDailyLevel();
-  _st.tubes = lv.tubes; _st.target = lv.target; _st.par = lv.par;
-  _st.initialTubes = cloneTubes(lv.tubes);
-  _st.forwardMoves = lv.forwardMoves || [];
-  _st._levelConfig = null;
   _st.dailyDayNum = lv.dayNum; _st.dailySeed = lv.seed;
-  _st._currentSeed = lv.seed; _st._currentDiff = lv.target.length;
-  _resetStuckState();
-  _showGame('Daily #' + lv.dayNum); _renderAll();
-  _scheduleStuckCheck({ initialCheck: true });
+  _initPlaySession(lv, null, 'Daily #' + lv.dayNum);
 }
 
 function _loadCode() {
@@ -1658,19 +1833,10 @@ function _loadCode() {
   if (!dec) { Toast.show('Invalid code — check and try again'); return; }
   const lv = generateChallengeLevel(dec.seed, dec.difficulty);
   if (!lv) { Toast.show('Could not load this puzzle'); return; }
-  _st.mode = 'challenge'; _st.won = false; _st.moveCount = 0; _st.history = [];
-  _st.selectedTube = -1; _st.animating = false; _st.undosLeft = _st.FREE_UNDOS; _st.hintMove = null;
+  _st.mode = 'challenge';
   _st.challengeCode = raw.toUpperCase(); _st.challengeSeed = lv.seed; _st.challengeDiff = lv.difficulty;
-  _st.tubes = lv.tubes; _st.target = lv.target; _st.par = lv.par;
-  _st.initialTubes = cloneTubes(lv.tubes);
-  _st.forwardMoves = lv.forwardMoves || [];
-  _st._levelConfig = null;
-  _st._currentSeed = lv.seed; _st._currentDiff = lv.difficulty;
-  _waves = {}; _anim = null;
-  if (_movesTimer) { clearInterval(_movesTimer); _movesTimer = null; }
-  _resetStuckState();
-  _showGame('Challenge'); _renderAll(); dom.codeInput.value = '';
-  _scheduleStuckCheck({ initialCheck: true });
+  _initPlaySession(lv, null, 'Challenge');
+  dom.codeInput.value = '';
 }
 
 /* ---- tutorial ---- */
@@ -1687,8 +1853,10 @@ function _maybeStartTut(n) {
     dom.tutorialText.textContent = cfg.introHint;
     dom.btnSkipTut.textContent = 'Got it';
     dom.tutorialBar.classList.remove('hidden');
+    _renderTubesAll();
   } else {
     dom.tutorialBar.classList.add('hidden');
+    _renderTubesAll();
   }
 }
 
@@ -1832,8 +2000,8 @@ function _afterMove() {
   _st.hintMove = null;
   if (_st.tutorialActive) _showTutHint();
   if (checkWin(_st.tubes, _st.target)) { _st.won = true; _onWin(); return; }
-  _updateProgressScore();
   _scheduleStuckCheck();
+  _updateDebugTubesOverlay();
 }
 
 /* ---- win ---- */
@@ -1987,30 +2155,20 @@ function _restart() {
   Particles.clear(); Confetti.clear();
   _comboCount = 0; _lastFuse = false;
   document.body.style.transform = '';
-  // Track restarts for condition (c) across retries of the same level
-  _st._nextRestartCount = _st.restartCount + 1;
-  _hideStuckBanner();
+  _stopStuckActivity();
   if (_st.mode === 'daily') _startDaily();
   else if (_st.mode === 'challenge') _restartChallenge();
   else _startLevel(_st.levelNum);
 }
 
 function _restartChallenge() {
-  const lv = generateChallengeLevel(_st.challengeSeed, _st.challengeDiff); if(!lv) { _st._nextRestartCount = 0; return; }
-  _st.won=false; _st.moveCount=0; _st.history=[]; _st.selectedTube=-1; _st.animating=false;
-  _st.undosLeft=_st.FREE_UNDOS; _st.hintMove=null;
-  _st.tubes=lv.tubes; _st.target=lv.target; _st.par=lv.par;
-  _st.initialTubes=cloneTubes(lv.tubes); _st.forwardMoves=lv.forwardMoves||[];
-  _st._levelConfig = null;
-  _resetStuckState();
-  _renderAll();
-  _scheduleStuckCheck({ initialCheck: true });
+  const lv = generateChallengeLevel(_st.challengeSeed, _st.challengeDiff); if(!lv) return;
+  _st.mode = 'challenge';
+  _initPlaySession(lv, null, 'Challenge');
 }
 
 function _nextLevel() {
   _st._forcedSeed = undefined;
-  _st.restartCount = 0;
-  _st._nextRestartCount = 0;
   _startLevel(_st.levelNum);
 }
 
@@ -2024,19 +2182,31 @@ function _dateStr(d) {
 }
 
 /* ===================================================================
-   STUCK RESCUE SYSTEM
+   EXTRA "+" SLOT & STUCK DETECTION SYSTEM
    =================================================================== */
 
+const MAX_EXTRA_TUBES = 2;
 let _stuckWorker        = null;
 let _workerSupported    = (typeof Worker !== 'undefined');
-let _pendingWorkerCheck = null;   // { seq, payload } while waiting for worker reply
+let _pendingWorkerCheck = null;
 let _sliceTimer         = null;
-let _progressWatchTimer = null;
-let _bannerHideTimer    = null;
 let _popInTimer         = null;
 
-/** Compute rescue rules for the active level/mode from one single helper. */
-function _getRescuePolicy() {
+function _getCoinModule() {
+  if (typeof Economy !== 'undefined') return Economy;
+  if (typeof Coins !== 'undefined') return Coins;
+  return null;
+}
+
+/**
+ * Compute extra-tube availability & cost policy for current mode/level.
+ * Rules:
+ *   - Max 2 extra tubes per level in EVERY realm, total real tubes <= 14.
+ *   - Levels 1-10: first extra always free.
+ *   - Realms 1-2 (levels 1-30): first extra FREE, second AD or 100 coins.
+ *   - Realms 3+: both AD or 100 coins.
+ */
+function _getExtraPolicy() {
   const cfg = _st._levelConfig;
   let realm = 2;
   if (cfg && cfg.realmIndex) {
@@ -2047,76 +2217,78 @@ function _getRescuePolicy() {
   } else if (_st.mode === 'daily') {
     realm = 2;
   }
-  const maxExtra = realm <= 5 ? 1 : 2;
-  const isLevel1to10 = (_st.mode === 'level' && _st.levelNum <= 10);
-  const isFree = isLevel1to10 || (realm <= 2 && _st.extraTubesAdded === 0);
-  const canAdd = (_st.tubes.length < MAX_TUBES) && (_st.extraTubesAdded < maxExtra);
-  return { realm, maxExtra, isLevel1to10, isFree, canAdd };
+
+  const extrasLeft = Math.max(0, Math.min(MAX_EXTRA_TUBES - _st.extraTubesAdded, MAX_TUBES - _st.tubes.length));
+  const firstFreeEligible = _st.mode === 'level'
+    ? (_st.levelNum <= 10 || realm <= 2)
+    : (realm <= 2);
+  const isFree = firstFreeEligible && _st.extraTubesAdded === 0;
+  const coinMod = _getCoinModule();
+  const coinBal = coinMod ? coinMod.getBalance() : 0;
+  const costLabel = isFree ? 'FREE' : (coinBal >= 100 ? '100' : 'AD');
+  const hasPlusSlot = extrasLeft > 0;
+  const slots = _st.tubes.length + (hasPlusSlot ? 1 : 0);
+
+  return { realm, extrasLeft, hasPlusSlot, isFree, costLabel, coinMod, coinBal, slots };
 }
 
-/** Monotonic board-quality heuristic for condition (e) progress tracking. */
-function _boardProgressScore(tubes, target) {
-  const targetSet = new Set(target);
-  let score = 0;
-  for (let i = 0; i < tubes.length; i++) {
-    const t = tubes[i];
-    if (!t.length) continue;
-    score -= t.length * 4;
-    if (isTubeComplete(t) && targetSet.has(t[0])) score += 20;
-    let segs = 1;
-    for (let j = 1; j < t.length; j++) {
-      if (t[j] !== t[j - 1]) segs++;
-    }
-    score -= segs * 2;
+function _isPlusPulsing() {
+  if (_st.won || _st.mode === 'home') return false;
+  if (_st._forceStuck) return true;
+  // Never pulse in the first 5 moves of a level
+  return _st.stuckStatus === 'yes' && _st.moveCount > 5;
+}
+
+function _updatePlusSlotVisual(policyOpt) {
+  if (!_plusEl) return;
+  const policy = policyOpt || _getExtraPolicy();
+  if (!policy.hasPlusSlot) return;
+
+  const pulsing = _isPlusPulsing();
+  _plusEl.wrapper.classList.toggle('is-stuck', pulsing);
+  _plusEl.wrapper.classList.toggle('is-busy', !!_st._addingTube);
+  if (_plusEl.costEl) {
+    _plusEl.costEl.textContent = policy.costLabel;
+    _plusEl.costEl.classList.toggle('cost-free', policy.costLabel === 'FREE');
+    _plusEl.costEl.classList.toggle('cost-coins', policy.costLabel === '100');
   }
-  return score;
+  if (_plusEl.leftEl) {
+    _plusEl.leftEl.textContent = policy.extrasLeft + ' left';
+  }
+  _redrawPlusSlot();
 }
 
-/** Stop any pending background checks, slices, watchers, and hide banner. */
+function _updateDebugTubesOverlay(policyOpt) {
+  if (!dom.debugTubesOverlay) return;
+  if (!_st._debugTubes || _st.mode === 'home') {
+    dom.debugTubesOverlay.classList.add('hidden');
+    return;
+  }
+  const policy = policyOpt || _getExtraPolicy();
+  const baseCount = _st.initialTubes ? _st.initialTubes.length : _st.tubes.length;
+  const effStuck = _st._forceStuck ? 'yes' : (_st.stuckStatus || 'unknown');
+  dom.debugTubesOverlay.textContent =
+    'base tubes ' + baseCount +
+    ' | extra used ' + _st.extraTubesAdded + '/2' +
+    ' | slots ' + policy.slots +
+    ' | stuck: ' + effStuck +
+    ' | empty at start: ' + _st.emptyAtStart;
+  dom.debugTubesOverlay.classList.remove('hidden');
+}
+
 function _stopStuckActivity() {
   _st._stuckCheckSeq++;
   _pendingWorkerCheck = null;
   if (_sliceTimer) { clearTimeout(_sliceTimer); _sliceTimer = null; }
-  if (_progressWatchTimer) { clearInterval(_progressWatchTimer); _progressWatchTimer = null; }
   if (_popInTimer) { clearTimeout(_popInTimer); _popInTimer = null; }
-  _hideStuckBanner();
 }
 
-/** Reset stuck state at the start of a level / mode. */
 function _resetStuckState() {
   _stopStuckActivity();
-  _st.stuckDetected     = false;
-  _st.extraTubesAdded   = 0;
-  _st.usedExtraTube     = false;
-  _st.restartCount      = _st._nextRestartCount || 0;
-  _st._nextRestartCount = 0;
-  _st.movesAtLastRescue = 0;
-  _st._addingTube       = false;
-  _st._hiddenAt         = 0;
-  _st.bestProgressScore = _boardProgressScore(_st.tubes || [], _st.target || []);
-  _st.lastProgressTime  = Date.now();
-  _startProgressWatcher();
-}
-
-/** Update progress timestamp when board improves meaningfully (condition e). */
-function _updateProgressScore() {
-  const score = _boardProgressScore(_st.tubes, _st.target);
-  if (score > _st.bestProgressScore) {
-    _st.bestProgressScore = score;
-    _st.lastProgressTime  = Date.now();
-  }
-}
-
-/** Watch for 60s idle with no progress after >= 10 moves even if player stops pouring. */
-function _startProgressWatcher() {
-  if (_progressWatchTimer) clearInterval(_progressWatchTimer);
-  _progressWatchTimer = setInterval(() => {
-    if (_st.won || _st.animating || _st.mode === 'home' || document.hidden || _st.stuckDetected) return;
-    if (_st.moveCount >= 10 && _st.lastProgressTime > 0 &&
-        (Date.now() - _st.lastProgressTime) >= 60000) {
-      _scheduleStuckCheck({ ignoreForce: true });
-    }
-  }, 2000);
+  _st.stuckStatus     = 'unknown';
+  _st.extraTubesAdded = 0;
+  _st.usedExtraTube   = false;
+  _st._addingTube     = false;
 }
 
 /* ---- Web Worker + Time-Sliced Chunked Solver ---- */
@@ -2149,14 +2321,20 @@ function _getWorker() {
   return _stuckWorker;
 }
 
+function _applyStuckResult(status) {
+  _st.stuckStatus = status || 'unknown';
+  _updatePlusSlotVisual();
+  _updateDebugTubesOverlay();
+}
+
 function _onWorkerMessage(e) {
   const r = e.data;
   if (!r || r.type !== 'result') return;
   if (_pendingWorkerCheck && r.seq === _pendingWorkerCheck.seq) {
     _pendingWorkerCheck = null;
   }
-  if (r.seq !== _st._stuckCheckSeq || _st.stuckDetected || _st.won || _st.mode === 'home') return;
-  if (r.stuck === true) _showStuckBanner(r.reason);
+  if (r.seq !== _st._stuckCheckSeq || _st.won || _st.mode === 'home') return;
+  _applyStuckResult(r.status || (r.stuck ? 'yes' : 'no'));
 }
 
 /** Time-sliced BFS fallback (~6ms per slice) so UI never freezes even without Workers. */
@@ -2167,63 +2345,48 @@ function _runChunkedCheck(d) {
 
   function stepSlice() {
     _sliceTimer = null;
-    if (d.seq !== _st._stuckCheckSeq || _st.won || _st.mode === 'home' || _st.stuckDetected) return;
+    if (d.seq !== _st._stuckCheckSeq || _st.won || _st.mode === 'home') return;
 
     const res = solver.step(600, 6);
     if (res) {
       const interpreted = StuckDetect.interpretSolverResult(res);
-      if (interpreted.stuck === true && !_st.stuckDetected && !_st.won) {
-        _showStuckBanner(interpreted.reason);
-      }
+      _applyStuckResult(interpreted.status);
       return;
     }
 
-    // Safety wall-clock cap in case slow device spans too many slices
-    if (Date.now() - tWallStart >= 900) return;
+    if (Date.now() - tWallStart >= 900) {
+      _applyStuckResult('unknown');
+      return;
+    }
     _sliceTimer = setTimeout(stepSlice, 0);
   }
 
   _sliceTimer = setTimeout(stepSlice, 0);
 }
 
-/** Run stuck detection off the main thread (Worker or time-sliced chunks). */
-function _scheduleStuckCheck(opts) {
+/** Run off-main-thread stuck detection after every move / undo / addTube. */
+function _scheduleStuckCheck() {
   if (_st.won || _st.mode === 'home') return;
-
-  const ignoreForce = !!(opts && opts.ignoreForce);
-  const forceNow = _st._forceStuck && !ignoreForce;
-
-  const policy = _getRescuePolicy();
-  if (!policy.canAdd) return;
 
   const seq = ++_st._stuckCheckSeq;
   _pendingWorkerCheck = null;
   if (_sliceTimer) { clearTimeout(_sliceTimer); _sliceTimer = null; }
 
   const payload = {
-    type:              'check',
-    seq:               seq,
-    tubes:             cloneTubes(_st.tubes),
-    target:            _st.target.slice(),
-    par:               _st.par,
-    moveCount:         _st.moveCount,
-    restartCount:      _st.restartCount,
-    movesAtLastRescue: _st.movesAtLastRescue,
-    lastProgressTime:  _st.lastProgressTime,
-    now:               Date.now(),
-    forceStuck:        forceNow,
+    type:   'check',
+    seq:    seq,
+    tubes:  cloneTubes(_st.tubes),
+    target: _st.target.slice(),
   };
 
-  // Run fast O(1) / O(N^2) rules synchronously using shared StuckDetect rules
+  // (a) No legal move checked immediately via shared StuckDetect rules
   const fast = StuckDetect.checkFastConditions(payload);
   if (fast !== null) {
-    if (fast.stuck === true && !_st.stuckDetected) {
-      _showStuckBanner(fast.reason);
-    }
+    _applyStuckResult(fast.status);
     return;
   }
 
-  // Condition (b): off-main-thread capped solver (30k nodes / 150ms)
+  // (b) Off-main-thread capped solver (30k nodes / 150ms)
   const worker = _getWorker();
   if (worker) {
     _pendingWorkerCheck = { seq, payload };
@@ -2239,151 +2402,68 @@ function _scheduleStuckCheck(opts) {
   }
 }
 
-/* ---- Banner show / hide ---- */
-function _showStuckBanner(reason) {
-  if (_st.stuckDetected || _st.won || _st.mode === 'home') return;
-  const policy = _getRescuePolicy();
-  if (!policy.canAdd) return;
-
-  _st.stuckDetected = true;
-  if (_bannerHideTimer) { clearTimeout(_bannerHideTimer); _bannerHideTimer = null; }
-
-  if (dom.stuckMsg) {
-    dom.stuckMsg.textContent = policy.isFree
-      ? 'Stuck? Add a tube (Free)'
-      : 'Stuck? Add a tube';
-  }
-  if (dom.btnAddTube) {
-    dom.btnAddTube.disabled = _st._addingTube;
-    dom.btnAddTube.textContent = policy.isFree ? 'Add Tube' : '📺 Free (Ad)';
-  }
-  if (dom.btnAddTubeCoins) {
-    dom.btnAddTubeCoins.disabled = _st._addingTube;
-    dom.btnAddTubeCoins.classList.toggle('hidden', policy.isFree);
-    dom.btnAddTubeCoins.textContent = '100 Coins';
-  }
-
-  if (dom.stuckBanner) {
-    dom.stuckBanner.classList.remove('hidden');
-    dom.stuckBanner.setAttribute('aria-hidden', 'false');
-    requestAnimationFrame(() => {
-      if (dom.stuckBanner && dom.stuckBanner.getAttribute('aria-hidden') === 'false') {
-        dom.stuckBanner.classList.add('visible');
-      }
-    });
-  }
-}
-
-function _hideStuckBanner() {
-  if (!dom.stuckBanner) return;
-  if (_bannerHideTimer) { clearTimeout(_bannerHideTimer); _bannerHideTimer = null; }
-  dom.stuckBanner.classList.remove('visible');
-  dom.stuckBanner.setAttribute('aria-hidden', 'true');
-  if (_reducedMotion()) {
-    dom.stuckBanner.classList.add('hidden');
-  } else {
-    _bannerHideTimer = setTimeout(() => {
-      _bannerHideTimer = null;
-      if (dom.stuckBanner) dom.stuckBanner.classList.add('hidden');
-    }, 400);
-  }
-}
-
-/* ---- Add Tube handler ---- */
-async function _onAddTube(choice) {
+/* ---- "+" Extra Tube Tap Handler ---- */
+async function _onAddPlusTube() {
   if (_st._addingTube || _st.won || _st.animating || _st.mode === 'home') return;
 
-  const policy = _getRescuePolicy();
-  if (_st.tubes.length >= MAX_TUBES) {
-    Toast.show('Maximum tube count reached (' + MAX_TUBES + ')');
-    _hideStuckBanner();
-    return;
-  }
-  if (_st.extraTubesAdded >= policy.maxExtra) {
-    Toast.show('No more extra tubes for this level');
-    _hideStuckBanner();
-    return;
-  }
+  const policy = _getExtraPolicy();
+  if (policy.extrasLeft <= 0) return;
 
   if (!policy.isFree) {
-    if (choice === 'coins') {
-      const bal = typeof Coins !== 'undefined' ? Coins.getBalance() : 0;
-      if (typeof Coins === 'undefined' || !Coins.spend(100)) {
-        Toast.show('Need 100 coins (have ' + bal + ') — watch an ad instead!');
+    if (policy.costLabel === '100' && policy.coinMod) {
+      if (!policy.coinMod.spend(100)) {
+        Toast.show('Not enough coins');
+        _updatePlusSlotVisual();
         return;
       }
       Toast.show('-100 coins · Extra tube added!');
     } else {
       _st._addingTube = true;
-      if (dom.btnAddTube) dom.btnAddTube.disabled = true;
-      if (dom.btnAddTubeCoins) dom.btnAddTubeCoins.disabled = true;
+      _updatePlusSlotVisual(policy);
       let ok = false;
       try { ok = await Monetization.showRewarded(); }
       finally {
         _st._addingTube = false;
-        if (dom.btnAddTube) dom.btnAddTube.disabled = false;
-        if (dom.btnAddTubeCoins) dom.btnAddTubeCoins.disabled = false;
+        _updatePlusSlotVisual();
       }
       if (_st.won || _st.mode === 'home') return;
       if (!ok) { Toast.show('Watch the ad to add a tube'); return; }
     }
   }
 
-  // Clear any raised selected tube before reflowing layout
+  // Lower any raised selected tube before reflowing layout
   if (_st.selectedTube >= 0 && _tubeEls[_st.selectedTube]) {
     _tubeEls[_st.selectedTube].wrapper.style.transition = '';
     _tubeEls[_st.selectedTube].wrapper.style.transform = '';
     _st.selectedTube = -1;
   }
 
-  // Add the empty tube and append an empty slot to history snapshots so
-  // undoing any move (including moves into the extra tube) preserves layout cleanly
+  // Capture FLIP rects before adding the new tube
+  const prevRects = {
+    tubes: _tubeEls.map(el => el && el.wrapper && el.wrapper.getBoundingClientRect ? el.wrapper.getBoundingClientRect() : null),
+    plus:  _plusEl && _plusEl.wrapper && _plusEl.wrapper.getBoundingClientRect ? _plusEl.wrapper.getBoundingClientRect() : null,
+  };
+
+  // "+" slot turns into a real empty tube; Undo must never remove an added tube
+  const newTubeIdx = _st.tubes.length;
   _st.tubes.push([]);
   for (let i = 0; i < _st.history.length; i++) {
     if (Array.isArray(_st.history[i])) _st.history[i].push([]);
   }
   _st.extraTubesAdded++;
-  _st.usedExtraTube     = true;
-  _st.movesAtLastRescue = _st.moveCount;
-  _st.restartCount      = 0;
-  _st.lastProgressTime  = Date.now();
-  _st.bestProgressScore = _boardProgressScore(_st.tubes, _st.target);
+  _st.usedExtraTube = true;
+  _st.stuckStatus   = 'unknown';
 
-  // Append new wrapper before _renderTubesAll() so flexbox re-flows smoothly
-  // while keeping the pop-in animation on only the newly added tube
-  const area = document.getElementById('tube-area');
-  const ti   = _st.tubes.length - 1;
-  const wrapper = document.createElement('div');
-  wrapper.className = 'tube-wrapper' + (_reducedMotion() ? '' : ' tube-pop-in');
-  wrapper.setAttribute('role', 'button');
-  wrapper.setAttribute('aria-label', 'Tube ' + (ti + 1) + ' (extra)');
-  wrapper.addEventListener('click', () => _onTap(ti));
-  const canvas = document.createElement('canvas');
-  canvas.className = 'tube-canvas';
-  wrapper.appendChild(canvas);
-  if (area) area.appendChild(wrapper);
-  _tubeEls.push({ wrapper, canvas, ctx: null });
-
-  _renderTubesAll();
-
-  if (!_reducedMotion()) {
-    const clearPop = () => wrapper.classList.remove('tube-pop-in');
-    wrapper.addEventListener('animationend', clearPop, { once: true });
-    if (_popInTimer) clearTimeout(_popInTimer);
-    _popInTimer = setTimeout(() => { _popInTimer = null; clearPop(); }, 460);
-  }
-
-  _hideStuckBanner();
+  _renderTubesAll({ forceRebuild: true, prevRects, popIdx: newTubeIdx });
   Sound.ding(880);
   if (policy.isFree) Toast.show('Extra tube added!');
 
   // Re-run stuck detection normally afterward
-  _st.stuckDetected = false;
-  _scheduleStuckCheck({ ignoreForce: true });
+  _scheduleStuckCheck();
 }
 
 /* ===================================================================
-   END STUCK RESCUE
+   END EXTRA "+" SLOT & STUCK DETECTION SYSTEM
    =================================================================== */
 
 const _CHEERS = ['GREAT!', 'BRILLIANT!', 'SPLENDID!', 'AMAZING!'];

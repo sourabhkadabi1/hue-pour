@@ -71,6 +71,8 @@
         <button id="btn-skip-tutorial" class="btn-sm">Skip</button>
       </div>
     </div>
+
+    <div id="debug-tubes-overlay" class="debug-tubes-overlay hidden" aria-hidden="true"></div>
   </div>
 
   <!-- ===== WIN OVERLAY ===== -->
@@ -172,22 +174,6 @@
   </div>
 
   <div id="combo-flash" class="combo-flash hidden" aria-hidden="true"></div>
-
-  <!-- ===== STUCK RESCUE BANNER ===== -->
-  <div id="stuck-banner" class="stuck-banner hidden" role="alert" aria-live="polite" aria-hidden="true">
-    <span class="stuck-icon" aria-hidden="true">
-      <svg class="tube-icon-svg" viewBox="0 0 18 34">
-        <path d="M2 2 L2 25 A7 7 0 0 0 16 25 L16 2" fill="none" stroke="#CFCFCF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M9 11 L9 21 M5 16 L13 16" fill="none" stroke="#4fc3f7" stroke-width="2" stroke-linecap="round"/>
-      </svg>
-    </span>
-    <span id="stuck-banner-msg">Stuck? Add a tube</span>
-    <div id="stuck-actions" class="stuck-actions">
-      <button id="btn-add-tube" class="btn-sm stuck-add-btn">Add Tube</button>
-      <button id="btn-add-tube-coins" class="btn-sm stuck-coins-btn hidden">100 Coins</button>
-    </div>
-    <button id="btn-dismiss-stuck" class="btn-icon-sm stuck-dismiss" aria-label="Dismiss">✕</button>
-  </div>
 
   <!-- ===== TOAST ===== -->
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>

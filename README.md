@@ -15,8 +15,9 @@ python -m http.server 8765
 URL debug parameters:
 - `?level=N` — jump directly to level `N`
 - `?seed=NNN` — force a specific PRNG seed
-- `?forcestuck=1` — trigger the `"Stuck? Add a tube"` stuck-rescue banner immediately for testing
-- `?debug=levels` — print a `console.table` summary of levels 1–200 (`level`, `realm`, `targets`, `colors`, `tubes`, `par`)
+- `?forcestuck=1` — force the `"+"` tube slot pulse & `"Need room? Tap +"` tooltip for testing
+- `?debug=tubes` — show live overlay (`base tubes N | extra used E/2 | slots S | stuck: yes/no/unknown | empty at start: N`)
+- `?debug=levels` — print a `console.table` summary of levels 1–200 (`level`, `realm`, `targets`, `colors`, `tubes`, `emptyAtStart`, `fallback`, `par`) plus no-empty / fallback counts and first 10 fallback levels
 
 ## Features
 
@@ -32,7 +33,7 @@ URL debug parameters:
   8. **Candy Cloudland** (151–175): 8 targets, full 12 colors
   9. **Aurora Summit** (176–200): 9 targets (10 on levels 190, 195, 200), full 12 colors
   10. **Endless Spectrum** (201+): cycles 6–10 targets, full 12 colors, rising scramble
-- **Smooth Ramp**: 3 empty tubes on realm intro levels (first 3 of each realm) and +1 empty tube with shorter scramble on breathers (every 5th level, non-finale); scramble rises from ~60% to 100% within each realm and resets slightly lower at the start of the next realm.
+- **Smooth Ramp**: 2 spare tubes beyond target count for levels `1–30` and 1 spare tube from level `31+`; levels start with liquid in every tube (no completely empty starting tube across 199/200 campaign levels, with a 10-try fallback to ≤1 empty tube), keeping free space and ≥2 legal first moves. Intro and breather levels stay approachable with shorter scramble depths, while scramble rises from ~60% to 100% within each realm.
 - **Deterministic Color Selection**: Even coverage across each realm, no identical consecutive target sets, and consecutive levels share at most half their colors.
 
 ### Core Gameplay & 12-Color Wheel
@@ -40,9 +41,9 @@ URL debug parameters:
   - **Primaries**: Red (`#E53935`), Yellow (`#FFD93B`), Blue (`#2F7DF6`)
   - **Secondaries**: Orange (`#FF8A1F`), Green (`#2ECC71`), Purple (`#8E44AD`)
   - **Tertiaries** (cannot fuse further): Vermilion (`#FF5A36`), Amber (`#FFB020`), Lime (`#A6D930`), Teal (`#1BB3A5`), Indigo (`#4B4BD6`), Magenta (`#D63384`)
-- **Responsive Layout**: Up to 5 tubes per row for 1–10 tubes; 2 rows of up to 7 tubes for 11–14 tubes, dynamically scaled to fit screen width while preserving `height = 3.7 × width`.
+- **Responsive Slot Layout**: Counts total slots (`real tubes + "+" slot if shown`): up to `7` slots sit on one row; `8–14` slots split across two rows (`ceil(n/2)` in top row so no orphan tube ever appears), centered above bottom UI while preserving `height = 3.7 × width` and smooth FLIP re-flow on tube add.
 - **Deterministic Reverse-Move Generator**: Records the forward solution, validates every generated level via `replayMoves`, and uses a capped BFS solver for tighter `par` on levels with ≤ 5 targets.
-- **Stuck Rescue System (`www/stuckdetect.js`, `www/coins.js`)**: Off-main-thread Web Worker detection (with time-sliced chunked BFS fallback) checks no legal moves, capped solver unsolvability (30k nodes / 150ms, timeout treated as unknown), 2+ restarts, `> 2.5×par` moves, and 60s without progress after 10+ moves (never shown on the first 5 moves). Offers a slide-up banner to add an empty tube with pop-in animation (max 1 extra in Realms 1–5, max 2 in Realms 6–10, total ≤ 14; free in levels 1–10 and Realms 1–2 first extra; otherwise rewarded ad or 100-coin `Coins` stub), capping stars at 2 with a win badge while keeping seed/par/share codes intact and preserving Undo support.
+- **Inline `"+"` Extra Tube Slot & Stuck Help (`www/stuckdetect.js`, `www/coins.js`)**: Visible dashed empty tube slot with cost (`FREE`, `AD`, or `100`) and remaining count (`2 left` / `1 left`; max 2 extra per level in every realm, total ≤ 14; first extra free in levels 1–30, ad or 100 coins afterward; caps stars at 2 with a win badge; Undo preserves added tubes). Off-main-thread detection (`Worker` or chunked fallback) runs after every move and pulses the `"+"` slot (`"Need room? Tap +"`) after move 5 only when no legal move exists or the 30k/150ms solver proves unsolvable (timeouts = `unknown`).
 - **Daily Puzzle, Challenge Codes, Tutorial, Undo, Hint, Restart, Share Cards**.
 
 ### Visuals, Accessibility & Performance
@@ -59,15 +60,15 @@ URL debug parameters:
 | File | Purpose |
 |---|---|
 | `www/index.html` | Single-page app shell |
-| `www/style.css` | All styles (responsive 320px+, stuck rescue banner, accessibility, compact targets) |
+| `www/style.css` | All styles (responsive 320px+, `"+"` tube slot & stuck pulse, accessibility, compact targets) |
 | `www/progression.js` | Data-driven 10-realm progression and deterministic level config (`getLevelConfig`) |
 | `www/game.js` | Pure game logic: 12-color wheel, `FUSION_TABLE`, pour rules, packed-int BFS & chunked solver, reverse-move generator, replay validator |
-| `www/stuckdetect.js` | Stuck detection Web Worker + shared condition evaluator (`(a)–(e)`) |
-| `www/coins.js` | LocalStorage coin balance stub with `TODO` for real economy |
-| `www/ui.js` | Rendering, animation, stuck rescue & extra tube UI, WebAudio sound, celebrations, layout, debug URL flags, all UI |
+| `www/stuckdetect.js` | Stuck detection Web Worker (`no-legal-move` & `30k/150ms` solver -> `yes/no/unknown`) |
+| `www/coins.js` | LocalStorage coin balance stub with `TODO` for `economy.js` integration |
+| `www/ui.js` | Rendering, animation, inline `"+"` extra tube slot, balanced 7/14-slot FLIP layout, WebAudio sound, celebrations, debug URL flags, all UI |
 | `www/monetization.js` | Mock ad/IAP stubs |
-| `www/tests.html` | Automated test runner (rule checks, milestone levels 1–250, 1–10 targets × 200 seeds replay validation, stuck rescue checks) |
-| `www/README.md` | Detailed generator, solver, progression, stuck rescue, and color system notes |
+| `www/tests.html` | Automated test runner (rule checks, milestone levels 1–250, 1–10 targets × 200 seeds replay validation, 1–200 empty-tube audit, `"+"` slot / orphan checks) |
+| `www/README.md` | Detailed generator, solver, progression, `"+"` slot, and color system notes |
 
 ## License
 

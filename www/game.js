@@ -244,6 +244,32 @@ function hasLegalMove(tubes) {
   return false;
 }
 
+/** Count distinct legal (src, dst) pours available from `tubes`. */
+function countLegalMoves(tubes) {
+  const n = tubes.length;
+  let count = 0;
+  for (let si = 0; si < n; si++) {
+    for (let di = 0; di < n; di++) {
+      if (si === di) continue;
+      if (analyzePour(tubes, si, di).type !== 'illegal') count++;
+    }
+  }
+  return count;
+}
+
+/** Count how many tubes in `tubes` are completely empty. */
+function countEmptyTubes(tubes) {
+  let c = 0;
+  for (let i = 0; i < tubes.length; i++) if (!tubes[i].length) c++;
+  return c;
+}
+
+/** Check whether at least one tube has remaining free capacity. */
+function hasFreeTubeSpace(tubes) {
+  for (let i = 0; i < tubes.length; i++) if (tubes[i].length < TUBE_CAPACITY) return true;
+  return false;
+}
+
 /**
  * Create an incremental BFS solver so both synchronous calls and
  * time-sliced main-thread checks share identical traversal & pruning.
@@ -500,15 +526,9 @@ function targetForLevel(levelNum, rng) {
 }
 
 function emptyTubesForLevel(levelNum, numTargets) {
-  let empties;
-  if (numTargets <= 2)       empties = 2;
-  else if (numTargets === 3) empties = (levelNum % 3 === 0) ? 1 : 2;
-  else if (numTargets <= 6)  empties = 2;
-  else if (numTargets <= 8)  empties = 3;
-  else                       empties = 4;
-
+  const spare = levelNum <= 30 ? 2 : 1;
   // Enforce max 14 tubes total
-  return Math.max(1, Math.min(empties, MAX_TUBES - numTargets));
+  return Math.max(1, Math.min(spare, MAX_TUBES - numTargets));
 }
 
 function buildSolvedState(target, empties) {
@@ -527,12 +547,69 @@ function scrambleMoveCount(levelNum) {
   return 48 + Math.min(20, Math.floor((levelNum - 50) / 5));
 }
 
+/** Enumerate all strictly invertible reverse moves from `cur`. */
+function _collectReverseOptions(cur, lastSplitFrom, lastSplitTo) {
+  const n = cur.length;
+  const splitOpts = [];
+  const unfuseOpts = [];
+
+  for (let si = 0; si < n; si++) {
+    const src = cur[si];
+    if (!src.length) continue;
+
+    const sTop = tubeTop(src);
+    const block = topBlockSize(src);
+    const srcFree = tubeFreeSpace(src);
+    const revParents = REVERSE_FUSION[sTop];
+
+    for (let di = 0; di < n; di++) {
+      if (si === di) continue;
+      const dst = cur[di];
+      const dstFree = tubeFreeSpace(dst);
+      if (dstFree <= 0) continue;
+
+      // --- A) Reverse-pour (split u units of sTop from si to di) ---
+      const maxU = Math.min(block, dstFree);
+      const dstTop = tubeTop(dst);
+      const canMoveOntoDst = (dstTop !== sTop) || (srcFree === 0);
+
+      if (canMoveOntoDst) {
+        const dstUniformSame = dst.length > 0 && dst.every(c => c === sTop);
+
+        for (let u = 1; u <= maxU; u++) {
+          if (u === block && src.length > block) continue;
+          if (!dst.length && u === src.length) continue;
+          if ((dstUniformSame || !dst.length) && dst.length + u === TUBE_CAPACITY) continue;
+
+          splitOpts.push({ t: 'split', si, di, u });
+        }
+      }
+
+      // --- B) Reverse-fusion (split secondary/tertiary sTop into parents) ---
+      if (revParents) {
+        const [p1, p2] = revParents;
+        const dstAlmostFull = dst.length === TUBE_CAPACITY - 1;
+        if (!(dstAlmostFull && dst.every(c => c === p2))) {
+          unfuseOpts.push({ t: 'unfuse', si, di, keep: p1, send: p2 });
+        }
+        if (!(dstAlmostFull && dst.every(c => c === p1))) {
+          unfuseOpts.push({ t: 'unfuse', si, di, keep: p2, send: p1 });
+        }
+      }
+    }
+  }
+
+  let nonCancelSplits = splitOpts.filter(o => !(o.si === lastSplitTo && o.di === lastSplitFrom));
+  if (!nonCancelSplits.length) nonCancelSplits = splitOpts;
+  return { splitOpts, nonCancelSplits, unfuseOpts };
+}
+
 /**
  * Scramble by applying strictly invertible reverse moves from the solved state,
  * recording the exact forward move list that solves the level.
  *
- * Every reverse move (S_after -> S_before) is constructed so that
- * executePour(S_before, forward.src, forward.dst) reproduces S_after identically.
+ * Ensures every tube starts with >= 1 unit of liquid whenever possible,
+ * while preserving at least 1 unit of free tube capacity for the first move.
  *
  * Returns { tubes, forwardMoves }.
  */
@@ -541,106 +618,15 @@ function scramble(tubes, numMoves, rng) {
   const forwardMoves = [];
   const n = cur.length;
 
-  // Keep a small amount of free space so players have room to pour at level start
+  // Always reserve >= 1 free unit across the board so at least one tube has room
   let totalFree = 0;
   for (let i = 0; i < n; i++) totalFree += tubeFreeSpace(cur[i]);
-  const minKeepFree = totalFree >= 12 ? 3 : (totalFree >= 8 ? 2 : (totalFree >= 4 ? 1 : 0));
+  const minKeepFree = totalFree >= 12 ? 3 : (totalFree >= 8 ? 2 : 1);
 
   let unfuseCount = 0;
   let lastSplitFrom = -1, lastSplitTo = -1;
 
-  for (let m = 0; m < numMoves; m++) {
-    const splitOpts = [];
-    const unfuseOpts = [];
-
-    for (let si = 0; si < n; si++) {
-      const src = cur[si];
-      if (!src.length) continue;
-
-      const sTop = tubeTop(src);
-      const block = topBlockSize(src);
-      const srcFree = tubeFreeSpace(src);
-      const revParents = REVERSE_FUSION[sTop];
-
-      for (let di = 0; di < n; di++) {
-        if (si === di) continue;
-        const dst = cur[di];
-        const dstFree = tubeFreeSpace(dst);
-        if (dstFree <= 0) continue;
-
-        // --- A) Reverse-pour (split u units of sTop from si to di) ---
-        // Forward move will be: di -> si.
-        const maxU = Math.min(block, dstFree);
-        const dstTop = tubeTop(dst);
-        // A4: if di already has sTop on top, forward di->si would pour all matching units
-        // unless si was full (srcFree === 0 -> forward free space === u).
-        const canMoveOntoDst = (dstTop !== sTop) || (srcFree === 0);
-
-        if (canMoveOntoDst) {
-          const dstUniformSame = dst.length > 0 && dst.every(c => c === sTop);
-
-          for (let u = 1; u <= maxU; u++) {
-            // A2: forward pour cannot stack sTop onto a different colour beneath
-            if (u === block && src.length > block) continue;
-            // Skip moving entire uniform tube into an empty tube (pure permutation no-op)
-            if (!dst.length && u === src.length) continue;
-            // A3: forward pour cannot start from a completed tube
-            if ((dstUniformSame || !dst.length) && dst.length + u === TUBE_CAPACITY) continue;
-
-            splitOpts.push({ t: 'split', si, di, u });
-          }
-        }
-
-        // --- B) Reverse-fusion (split secondary/tertiary sTop into parents) ---
-        // Forward move will be: di (send) -> si (keep).
-        if (revParents) {
-          const [p1, p2] = revParents;
-          const dstAlmostFull = dst.length === TUBE_CAPACITY - 1;
-          // B1: forward pour cannot start from a completed tube
-          if (!(dstAlmostFull && dst.every(c => c === p2))) {
-            unfuseOpts.push({ t: 'unfuse', si, di, keep: p1, send: p2 });
-          }
-          if (!(dstAlmostFull && dst.every(c => c === p1))) {
-            unfuseOpts.push({ t: 'unfuse', si, di, keep: p2, send: p1 });
-          }
-        }
-      }
-    }
-
-    // Filter out immediate back-and-forth split cancellation when alternatives exist
-    let nonCancelSplits = splitOpts.filter(o => !(o.si === lastSplitTo && o.di === lastSplitFrom));
-    if (!nonCancelSplits.length) nonCancelSplits = splitOpts;
-
-    const allowUnfuseBySpace = totalFree > minKeepFree;
-    let chosen = null;
-
-    // On move 0, prefer splitting a full uniform tube first so smaller pieces
-    // are available to unfuse without locking remaining layers underneath.
-    const initialFullSplits = (m === 0)
-      ? nonCancelSplits.filter(o => cur[o.si].length === TUBE_CAPACITY)
-      : [];
-
-    if (initialFullSplits.length) {
-      chosen = initialFullSplits[Math.floor(rng() * initialFullSplits.length)];
-    } else if (unfuseOpts.length && allowUnfuseBySpace) {
-      // Ensure at least one fusion happens early once tubes are split, and ~40% unfuses overall
-      const forceUnfuse = (unfuseCount === 0 && m >= 1);
-      if (forceUnfuse || !nonCancelSplits.length || rng() < 0.4) {
-        // Prefer unfusing tubes that are not full, so underlying layers stay accessible
-        const partialUnfuses = unfuseOpts.filter(o => cur[o.si].length < TUBE_CAPACITY);
-        const pool = partialUnfuses.length ? partialUnfuses : unfuseOpts;
-        chosen = pool[Math.floor(rng() * pool.length)];
-      } else {
-        chosen = nonCancelSplits[Math.floor(rng() * nonCancelSplits.length)];
-      }
-    } else if (nonCancelSplits.length) {
-      chosen = nonCancelSplits[Math.floor(rng() * nonCancelSplits.length)];
-    } else if (unfuseOpts.length && totalFree > 0) {
-      chosen = unfuseOpts[Math.floor(rng() * unfuseOpts.length)];
-    }
-
-    if (!chosen) break;
-
+  function applyChosen(chosen) {
     if (chosen.t === 'split') {
       const c = tubeTop(cur[chosen.si]);
       for (let i = 0; i < chosen.u; i++) {
@@ -662,6 +648,77 @@ function scramble(tubes, numMoves, rng) {
     }
   }
 
+  for (let m = 0; m < numMoves; m++) {
+    const { nonCancelSplits, unfuseOpts } = _collectReverseOptions(cur, lastSplitFrom, lastSplitTo);
+    const allowUnfuse = totalFree > minKeepFree;
+    const emptiesNow = countEmptyTubes(cur);
+    let chosen = null;
+
+    // On move 0, split a full uniform tube first so smaller pieces are unlocked.
+    const initialFullSplits = (m === 0)
+      ? nonCancelSplits.filter(o => cur[o.si].length === TUBE_CAPACITY)
+      : [];
+
+    // Prefer moves that pour liquid into still-empty tubes without emptying source
+    const fillSplits = emptiesNow > 0
+      ? nonCancelSplits.filter(o => !cur[o.di].length && o.u < cur[o.si].length)
+      : [];
+    const fillUnfuses = (emptiesNow > 0 && allowUnfuse)
+      ? unfuseOpts.filter(o => !cur[o.di].length)
+      : [];
+    // Avoid turning a non-empty tube completely empty when alternatives exist
+    const keepNonEmptySplits = nonCancelSplits.filter(o => o.u < cur[o.si].length);
+    const safeSplits = keepNonEmptySplits.length ? keepNonEmptySplits : nonCancelSplits;
+
+    if (initialFullSplits.length) {
+      chosen = initialFullSplits[Math.floor(rng() * initialFullSplits.length)];
+    } else if ((fillUnfuses.length || fillSplits.length) && (m >= numMoves - 3 || rng() < 0.72)) {
+      if (fillUnfuses.length && (!fillSplits.length || unfuseCount === 0 || rng() < 0.5)) {
+        chosen = fillUnfuses[Math.floor(rng() * fillUnfuses.length)];
+      } else {
+        chosen = fillSplits[Math.floor(rng() * fillSplits.length)];
+      }
+    } else if (unfuseOpts.length && allowUnfuse) {
+      const forceUnfuse = (unfuseCount === 0 && m >= 1);
+      if (forceUnfuse || !safeSplits.length || rng() < 0.4) {
+        const partialUnfuses = unfuseOpts.filter(o => cur[o.si].length < TUBE_CAPACITY);
+        const pool = partialUnfuses.length ? partialUnfuses : unfuseOpts;
+        chosen = pool[Math.floor(rng() * pool.length)];
+      } else {
+        chosen = safeSplits[Math.floor(rng() * safeSplits.length)];
+      }
+    } else if (safeSplits.length) {
+      chosen = safeSplits[Math.floor(rng() * safeSplits.length)];
+    }
+
+    if (!chosen) break;
+    applyChosen(chosen);
+  }
+
+  // Repair phase: keep applying reverse moves into any still-empty tube until none is empty
+  for (let step = 0; step < 16 && countEmptyTubes(cur) > 0; step++) {
+    const { nonCancelSplits, unfuseOpts } = _collectReverseOptions(cur, lastSplitFrom, lastSplitTo);
+    const allowUnfuse = totalFree > minKeepFree;
+    const fillSplits = nonCancelSplits.filter(o => !cur[o.di].length && o.u < cur[o.si].length);
+    const fillUnfuses = allowUnfuse ? unfuseOpts.filter(o => !cur[o.di].length) : [];
+
+    let chosen = null;
+    if (fillUnfuses.length && (!fillSplits.length || rng() < 0.5)) {
+      chosen = fillUnfuses[Math.floor(rng() * fillUnfuses.length)];
+    } else if (fillSplits.length) {
+      chosen = fillSplits[Math.floor(rng() * fillSplits.length)];
+    } else if (allowUnfuse && unfuseOpts.length) {
+      chosen = unfuseOpts[Math.floor(rng() * unfuseOpts.length)];
+    } else {
+      const keepNonEmpty = nonCancelSplits.filter(o => o.u < cur[o.si].length);
+      const pool = keepNonEmpty.length ? keepNonEmpty : nonCancelSplits;
+      if (pool.length) chosen = pool[Math.floor(rng() * pool.length)];
+    }
+
+    if (!chosen) break;
+    applyChosen(chosen);
+  }
+
   forwardMoves.reverse();
   return { tubes: cur, forwardMoves };
 }
@@ -673,13 +730,44 @@ function _genSolveNodeLimit(numTargets) {
   return 700;
 }
 
+/** Evaluate a candidate scrambled state against validity, par, and legal move checks. */
+function _validateCandidate(scrambled, forwardMoves, target, opts) {
+  const maxEmpties = opts.maxEmpties !== undefined ? opts.maxEmpties : 0;
+  const minPar     = opts.minPar !== undefined ? opts.minPar : 3;
+  const maxPar     = opts.maxPar !== undefined ? opts.maxPar : Infinity;
+  const checkSolve = opts.checkSolve !== undefined ? opts.checkSolve : (target.length <= 5);
+
+  if (checkWin(scrambled, target)) return null;
+  const emptyAtStart = countEmptyTubes(scrambled);
+  if (emptyAtStart > maxEmpties) return null;
+  if (!hasFreeTubeSpace(scrambled)) return null;
+  if (countLegalMoves(scrambled) < 2) return null;
+
+  const replay = replayMoves(scrambled, forwardMoves, target);
+  if (!replay.success) return null;
+
+  let par = forwardMoves.length;
+  if (checkSolve) {
+    const solution = solve(scrambled, target, _genSolveNodeLimit(target.length));
+    if (solution && solution.moves.length < par) {
+      par = solution.moves.length;
+    }
+  }
+  if (par < minPar || par > maxPar) return null;
+
+  return { par, emptyAtStart };
+}
+
 /**
  * Generate a level. Deterministic for a given (levelNum, forcedSeed).
  * Uses progression.js getLevelConfig(levelNum) when available.
- * Returns { levelNum, seed, tubes, target, par, forwardMoves, config }.
+ * Enforces no empty tubes for the first 10 attempts, then falls back to
+ * allowing at most ONE empty tube so every level remains guaranteed solvable.
+ * Returns { levelNum, seed, tubes, target, par, forwardMoves, config, emptyAtStart, usedEmptyFallback }.
  */
 function generateLevel(levelNum, forcedSeed, opts) {
   const baseSeed = forcedSeed !== undefined ? forcedSeed : (levelNum * 31337 + 7919);
+  const NO_EMPTY_TRIES = 10;
   const maxAttempts = 80;
   const quiet = opts && opts.quiet;
   const cfg = typeof getLevelConfig === 'function' ? getLevelConfig(levelNum) : null;
@@ -689,45 +777,36 @@ function generateLevel(levelNum, forcedSeed, opts) {
     const rng  = mulberry32(seed);
 
     const target    = cfg ? cfg.targetColors.slice() : targetForLevel(levelNum, rng);
-    const empties   = cfg ? cfg.emptyTubes : emptyTubesForLevel(levelNum, target.length);
-    const solved    = buildSolvedState(target, empties);
+    const spares    = cfg ? cfg.emptyTubes : emptyTubesForLevel(levelNum, target.length);
+    const solved    = buildSolvedState(target, spares);
     const nScramble = cfg ? cfg.scrambleDepth : scrambleMoveCount(levelNum);
     const { tubes: scrambled, forwardMoves } = scramble(solved, nScramble, rng);
 
-    if (checkWin(scrambled, target)) continue;           // already solved
+    const checked = _validateCandidate(scrambled, forwardMoves, target, {
+      maxEmpties: attempt < NO_EMPTY_TRIES ? 0 : 1,
+      minPar: 3,
+      maxPar: levelNum <= 3 ? 12 : Infinity,
+    });
+    if (!checked) continue;
 
-    // VALIDATE by replaying the recorded forward moves
-    const replay = replayMoves(scrambled, forwardMoves, target);
-    if (!replay.success) continue;                       // regenerate with seed+1
-
-    // par = length of recorded solution (upper bound)
-    let par = forwardMoves.length;
-
-    // For <= 5 targets, also run capped BFS solver and use shorter par if it finishes
-    if (target.length <= 5) {
-      const solution = solve(scrambled, target, _genSolveNodeLimit(target.length));
-      if (solution && solution.moves.length < par) {
-        par = solution.moves.length;
-      }
-    }
-
-    // Reject trivially short puzzles
-    if (par < 3) continue;
-
-    // For very early levels, reject too-long solutions
-    if (levelNum <= 3 && par > 12) continue;
-
+    const usedEmptyFallback = checked.emptyAtStart > 0;
     if (!quiet) {
       console.log(
         'Level ' + levelNum +
         (cfg ? ' (' + cfg.realmName + ')' : '') +
-        ': seed=' + seed + ', par=' + par + ', targets=' + target.length
+        ': seed=' + seed + ', par=' + checked.par + ', targets=' + target.length +
+        ', empty=' + checked.emptyAtStart
       );
     }
-    return { levelNum, seed, tubes: scrambled, target, par, forwardMoves, config: cfg };
+    return {
+      levelNum, seed, tubes: scrambled, target, par: checked.par,
+      forwardMoves, config: cfg,
+      emptyAtStart: checked.emptyAtStart,
+      usedEmptyFallback,
+    };
   }
 
-  // Fallback preserving config target count/colors and replay validation
+  // Fallback allowing 1 empty tube with scaled scramble, preserving replay validation
   if (!quiet) {
     console.warn('Level ' + levelNum + ': fallback after ' + maxAttempts + ' attempts');
   }
@@ -735,29 +814,28 @@ function generateLevel(levelNum, forcedSeed, opts) {
     const seed   = baseSeed + maxAttempts + attempt;
     const rng    = mulberry32(seed);
     const target = cfg ? cfg.targetColors.slice() : targetForLevel(levelNum, rng);
-    const empties = cfg ? cfg.emptyTubes : emptyTubesForLevel(levelNum, target.length);
-    const solved = buildSolvedState(target, empties);
+    const spares = cfg ? cfg.emptyTubes : emptyTubesForLevel(levelNum, target.length);
+    const solved = buildSolvedState(target, spares);
     const { tubes: sc, forwardMoves } = scramble(solved, Math.max(6, target.length * 4), rng);
-    if (checkWin(sc, target)) continue;
-    const replay = replayMoves(sc, forwardMoves, target);
-    if (!replay.success) continue;
-    let par = forwardMoves.length;
-    if (target.length <= 5) {
-      const sol = solve(sc, target, _genSolveNodeLimit(target.length));
-      if (sol && sol.moves.length < par) par = sol.moves.length;
-    }
-    return { levelNum, seed, tubes: sc, target, par: Math.max(par, 1), forwardMoves, config: cfg };
+    const checked = _validateCandidate(sc, forwardMoves, target, { maxEmpties: 1, minPar: 1 });
+    if (!checked) continue;
+    return {
+      levelNum, seed, tubes: sc, target, par: checked.par,
+      forwardMoves, config: cfg, emptyAtStart: checked.emptyAtStart, usedEmptyFallback: true,
+    };
   }
 
-  // Last-resort deterministic valid state
+  // Last-resort deterministic replay-valid state
   const rng = mulberry32(baseSeed);
   const target = cfg ? cfg.targetColors.slice() : targetForLevel(levelNum, rng);
-  const empties = cfg ? cfg.emptyTubes : emptyTubesForLevel(levelNum, target.length);
-  const solved = buildSolvedState(target, empties);
-  const { tubes: sc, forwardMoves } = scramble(solved, 4, rng);
+  const spares = cfg ? cfg.emptyTubes : emptyTubesForLevel(levelNum, target.length);
+  const solved = buildSolvedState(target, spares);
+  const { tubes: sc, forwardMoves } = scramble(solved, 5, rng);
+  const emptyAtStart = countEmptyTubes(sc);
   return {
     levelNum, seed: baseSeed, tubes: sc, target,
     par: Math.max(forwardMoves.length, 1), forwardMoves, config: cfg,
+    emptyAtStart, usedEmptyFallback: emptyAtStart > 0,
   };
 }
 
@@ -797,24 +875,21 @@ function generateDailyLevel(date) {
     const solved = buildSolvedState(target, 2);
     const { tubes: scrambled, forwardMoves } = scramble(solved, 20, rng);
 
-    if (checkWin(scrambled, target)) continue;
-
-    // Validate by replay
-    const replay = replayMoves(scrambled, forwardMoves, target);
-    if (!replay.success) continue;
-
-    let par = forwardMoves.length;
-    const solution = solve(scrambled, target, _genSolveNodeLimit(target.length));
-    if (solution && solution.moves.length < par) par = solution.moves.length;
-    if (par < 5) continue;
+    const checked = _validateCandidate(scrambled, forwardMoves, target, {
+      maxEmpties: attempt < 10 ? 0 : 1,
+      minPar: 5,
+    });
+    if (!checked) continue;
 
     console.log(
       'Daily #' + dayNum + ': seed=' + s +
-      ', par=' + par
+      ', par=' + checked.par + ', empty=' + checked.emptyAtStart
     );
     return {
       dayNum, seed: s, tubes: scrambled, target,
-      par, isDaily: true, forwardMoves,
+      par: checked.par, isDaily: true, forwardMoves,
+      emptyAtStart: checked.emptyAtStart,
+      usedEmptyFallback: checked.emptyAtStart > 0,
     };
   }
   // fallback
@@ -883,31 +958,28 @@ function generateChallengeLevel(seed, difficulty) {
           : pool[Math.floor(rng() * pool.length)]
       );
     }
-    var empties  = emptyTubesForLevel(numT * 10 + (attempt % 2), numT);
-    var solved   = buildSolvedState(target, empties);
+    var spares   = emptyTubesForLevel(numT <= 3 ? 20 : 35, numT);
+    var solved   = buildSolvedState(target, spares);
     var nMoves   = numT === 1 ? 10 : (numT === 2 ? 20 : Math.min(55, 22 + numT * 4));
     var result   = scramble(solved, nMoves, rng);
     var scrambled = result.tubes;
     var forwardMoves = result.forwardMoves;
-    if (checkWin(scrambled, target)) continue;
 
-    var replay = replayMoves(scrambled, forwardMoves, target);
-    if (!replay.success) continue;
-
-    var par = forwardMoves.length;
-    if (numT <= 5) {
-      var solution = solve(scrambled, target, _genSolveNodeLimit(numT));
-      if (solution && solution.moves.length < par) par = solution.moves.length;
-    }
-    if (par < 3) continue;
+    var checked = _validateCandidate(scrambled, forwardMoves, target, {
+      maxEmpties: attempt < 10 ? 0 : 1,
+      minPar: 3,
+    });
+    if (!checked) continue;
 
     console.log(
       'Challenge seed=' + s + ' diff=' + numT +
-      ', par=' + par
+      ', par=' + checked.par + ', empty=' + checked.emptyAtStart
     );
     return {
       seed: s, difficulty: numT, tubes: scrambled, target,
-      par, isChallenge: true, forwardMoves,
+      par: checked.par, isChallenge: true, forwardMoves,
+      emptyAtStart: checked.emptyAtStart,
+      usedEmptyFallback: checked.emptyAtStart > 0,
     };
   }
   return null;

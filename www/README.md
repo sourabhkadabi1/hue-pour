@@ -6,15 +6,15 @@ A mobile-first, portrait-only liquid-sort puzzle game where colours **blend** ac
 
 | File | Purpose |
 |------|---------|
-| `www/index.html` | Entry point. Loads CSS & JS (`progression.js`, `game.js`, `monetization.js`, `coins.js`, `stuckdetect.js`, `ui.js`), defines DOM: home screen, game screen, stuck rescue banner, overlays. |
-| `www/style.css` | All styling: dark theme, glass tubes, animations, home screen, stuck rescue banner, overlays, responsive breakpoints (320–500 px), compact 10-target row support. |
-| `www/progression.js` | Data-driven realm & progression configuration (`getLevelConfig(levelNumber)`): 10 realms, smooth scramble/empty-tube ramp, breathers, intros, finales, and deterministic colour schedules. |
-| `www/game.js` | **Pure game logic** — no DOM. 12-colour wheel, unified `FUSION_TABLE`, pour rules, packed-int BFS & chunked/capped solvability checker, reverse-move level generator with replay validation, daily puzzle, challenge codes, hints. |
-| `www/stuckdetect.js` | **Stuck-detection engine & Web Worker** — runs off the main thread (`new Worker('stuckdetect.js')` or time-sliced chunked fallback via `createChunkedSolver`) to evaluate conditions `(a)–(e)`. |
-| `www/coins.js` | **Coins stub (`TODO`)** — localStorage-backed balance helpers (`getBalance`, `spend`, `earn`) wrapped in `try/catch`. |
-| `www/ui.js` | UI layer — canvas tube rendering, 2-row responsive layout (up to 7 tubes per row for 11–14 tubes), touch handling, pour/fuse animations, stuck rescue banner & extra-tube reflow, WebAudio sound, haptics, settings, save/load, home screen, daily, tutorial, share card, monetization hooks. |
+| `www/index.html` | Entry point. Loads CSS & JS (`progression.js`, `game.js`, `monetization.js`, `coins.js`, `stuckdetect.js`, `ui.js`), defines DOM: home screen, game screen, `?debug=tubes` overlay, overlays. |
+| `www/style.css` | All styling: dark theme, glass tubes, animations, `"+"` extra tube slot, stuck pulse/tooltip, home screen, overlays, responsive breakpoints (320–500 px). |
+| `www/progression.js` | Data-driven realm & progression configuration (`getLevelConfig(levelNumber)`): 10 realms, 2 spare tubes (L1–30) / 1 spare tube (L31+), shorter scramble on intro & breather levels, and deterministic colour schedules. |
+| `www/game.js` | **Pure game logic** — no DOM. 12-colour wheel, unified `FUSION_TABLE`, pour rules, packed-int BFS & chunked/capped solvability checker, reverse-move level generator (requiring 0 empty start tubes with 10-try fallback to ≤1 empty, free space, ≥2 legal moves) with replay validation, daily puzzle, challenge codes, hints. |
+| `www/stuckdetect.js` | **Stuck-detection engine & Web Worker** — runs after every move off the main thread (`new Worker('stuckdetect.js')` or time-sliced chunked fallback) returning `yes` (no legal moves or solver proven unsolvable), `no`, or `unknown` (timeout/cap). |
+| `www/coins.js` | **Coins stub (`TODO`)** — localStorage-backed balance helpers (`getBalance`, `spend`, `earn`) wrapped in `try/catch`; `ui.js` uses `Economy` (`economy.js`) when present, else falls back to `Coins`. |
+| `www/ui.js` | UI layer — canvas tube rendering, 1-row (≤7 slots) / balanced 2-row (`8–14` slots, `ceil(n/2)` first row) layout centered above bottom UI, smooth FLIP re-flow, `"+"` extra tube slot with pop-in animation, WebAudio sound, haptics, settings, save/load, home screen, daily, tutorial, share card, monetization hooks. |
 | `www/monetization.js` | Mock ads & IAP stubs (`showInterstitial`, `showRewarded`, `purchaseRemoveAds`, `isAdsRemoved`, `restorePurchases`). |
-| `www/tests.html` | Browser test suite: validates colour/fusion rules, milestone levels (1, 15, 16, 30, 50, 51, 100, 150, 200, 250), 200 seeds per config (1–10 targets) through replay validation, and stuck rescue checks (levels 1, 16, 51, 101 + conditions `a–e`). |
+| `www/tests.html` | Browser test suite: validates colour/fusion rules, milestone levels (1, 15, 16, 30, 50, 51, 100, 150, 200, 250), 200 seeds per config (1–10 targets) through replay validation, levels 1–200 empty-tube/fallback audit, and 9-level extra `"+"` slot / orphan-free row checks. |
 | `www/README.md` | This file. |
 
 ## Progression & Realms (`www/progression.js`)
@@ -32,9 +32,9 @@ A mobile-first, portrait-only liquid-sort puzzle game where colours **blend** ac
 9. **Aurora Summit** (176–200): 9 targets (10 on levels 190, 195, 200), full 12 colours.
 10. **Endless Spectrum** (201+): cycles 6–10 targets, full 12 colours, rising scramble depth.
 
-- **Intro levels** (first 3 of each realm): 3 empty tubes.
-- **Breather levels** (every 5th level, not finale): +1 empty tube and shorter scramble.
-- **Finale** (last level of a realm): max scramble, 2 empty tubes.
+- **Spare tubes**: 2 spare tubes for levels 1–30, 1 spare tube from level 31 onward (`emptyTubes` in `getLevelConfig`). Every generated level pours into empty tubes during scrambling until none starts empty (with a 1-empty fallback only if 10 tries cannot pass validation), while keeping free space and at least 2 legal first moves.
+- **Intro & Breather levels**: first 3 levels of each realm (`isIntro`) and every non-finale 5th level (`isBreather`) use shorter scramble depths (`~0.75×` / `~0.70×`).
+- **Finale** (last level of a realm): max scramble depth.
 - **Target colour selection**: deterministic seeded schedule per realm ensuring even pool coverage, no consecutive identical target sets, and at most half shared colours between consecutive levels.
 
 ## 12-Colour Wheel & Fusion Table
@@ -45,26 +45,20 @@ All fusion rules live in a single `FUSION_TABLE` object in `www/game.js` (order 
 - **Secondaries**: Red+Yellow → Orange (`#FF8A1F` `◆`), Yellow+Blue → Green (`#2ECC71` `★`), Blue+Red → Purple (`#8E44AD` `✚`)
 - **Tertiaries** (cannot fuse further): Red+Orange → Vermilion (`#FF5A36` `▼`), Yellow+Orange → Amber (`#FFB020` `✕`), Yellow+Green → Lime (`#A6D930` `≡`), Blue+Green → Teal (`#1BB3A5` `○`), Blue+Purple → Indigo (`#4B4BD6` `≈`), Red+Purple → Magenta (`#D63384` `□`)
 
-## Stuck Rescue System (`www/stuckdetect.js`, `www/coins.js`, `www/ui.js`)
+## Extra `"+"` Tube Slot & Stuck Help (`www/stuckdetect.js`, `www/coins.js`, `www/ui.js`)
 
-- **Off-main-thread detection** runs after every move via a Web Worker (`www/stuckdetect.js`), with automatic time-sliced chunked fallback (`createChunkedSolver`, ~6 ms slices) when Workers are unavailable (`file://`).
-- **Stuck triggers** (never shown during the first 5 moves of a level unless `?forcestuck=1` is set):
-  - **(a)** No legal move remains.
-  - **(b)** Capped BFS (`30,000` nodes, `150 ms` time budget) proves the state unsolvable (`timeout` / node-cap is treated as unknown, never stuck).
-  - **(c)** Player has restarted the level 2+ times.
-  - **(d)** Move count exceeds `2.5 × par`.
-  - **(e)** 60 seconds elapsed with no board progress after at least 10 moves.
-- **Extra tube rules**:
-  - Adds one empty tube with a pop-in animation and smooth layout re-flow, capped at `14` total tubes (`1` max extra in Realms 1–5; `2` max extra in Realms 6–10).
-  - Levels 1–10: always free and offered automatically on first detection; Realms 1–2: first extra tube per level is free; otherwise watch a rewarded ad (`showRewarded`) or spend 100 coins (`Coins.spend(100)` stub with `TODO`).
-  - Caps level stars at 2 and displays an original tube badge on the win / daily completion screen without altering seed, par, or challenge codes. Undo works seamlessly for moves made into extra tubes, and stuck detection re-runs normally afterward.
+- **Inline `"+"` tube slot**: Rendered at the end of the tube layout inside `#tube-area` using the same tube dimensions (`height = 3.7 × width`), with a dashed outline, `"+"` icon, cost badge (`FREE`, `AD`, or `100`), and remaining count (`2 left` / `1 left`).
+- **Hard cap & costs**: Max `2` extra tubes per level in every realm (and total tubes ≤ `14`); restarting resets extra count to `0`, and Undo never removes an added extra tube. Levels `1–30` (Realms 1–2): 1st extra `FREE`, 2nd `AD` (`showRewarded`) or `100` coins (`Economy`/`Coins` stub); Realms `3+` (levels `31+`): both `AD` or `100` coins.
+- **Subtle stuck signal**: Runs `stuckdetect.js` off the main thread after every move (`no-legal-move` or capped BFS `30,000` nodes / `150 ms` proving unsolvable; timeout/cap = `unknown`). When stuck after move 5 (`moveCount > 5`), the `"+"` slot gently pulses/glows with a `"Need room? Tap +"` tooltip (no banners, no popups, no auto-add). Using an extra tube caps level stars at `2` and displays a small tube icon on the win screen.
+- **Responsive Slot Layout**: `slots = realTubes + (hasPlusSlot ? 1 : 0)`. Up to `7` slots fit in one row; `8–14` slots split into two rows with `ceil(slots / 2)` in the top row (never leaving a single orphan tube), centered above bottom UI with smooth FLIP re-flow animation.
 
 ## URL Parameters
 
 - `?level=N` — jump directly to level `N`
 - `?seed=NNN` — force a specific PRNG seed
-- `?forcestuck=1` — trigger the `"Stuck? Add a tube"` banner immediately (testable on levels `1`, `16`, `51`, `101`, etc.)
-- `?debug=levels` — print a console table (`console.table`) of levels 1–200 (`level`, `realm`, `targets`, `colors`, `tubes`, `par`)
+- `?forcestuck=1` — force the `"+"` slot stuck pulse & tooltip (`"Need room? Tap +"`) for testing
+- `?debug=tubes` — show live overlay `"base tubes N | extra used E/2 | slots S | stuck: yes/no/unknown | empty at start: N"`
+- `?debug=levels` — print a console table (`console.table`) of levels 1–200 plus counts of no-empty-tube vs 1-empty fallback levels and the first 10 fallback levels
 
 ## Capacitor
 

@@ -1,5 +1,5 @@
 // ============================================================
-// HUE POUR — Coins stub  (TODO: replace with real economy)
+// HUE POUR — Coins stub (TODO: use economy.js when integrated)
 // ============================================================
 'use strict';
 
@@ -20,14 +20,14 @@ const Coins = (() => {
    * Returns true if successful (balance deducted), false if insufficient.
    */
   function spend(amount) {
-    // TODO: hook into real IAP / server-side coins when implemented
+    // TODO: integrate with economy.js when added
     const bal = getBalance();
     if (bal < amount) return false;
     setBalance(bal - amount);
     return true;
   }
 
-  /** Add coins (e.g. from rewarded ad). */
+  /** Add coins (e.g. from rewarded ad or shop). */
   function earn(amount) {
     setBalance(getBalance() + amount);
   }

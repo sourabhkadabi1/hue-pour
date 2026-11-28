@@ -183,11 +183,16 @@ body.colorblind .target-unit .cb { display: flex; }
 /* ---- Tube Area ---- */
 #tube-area {
   flex: 1; min-height: 0;
-  display: flex; flex-wrap: wrap;
-  align-items: center; justify-content: center; align-content: center;
-  column-gap: var(--tube-gap, 12px);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
   row-gap: var(--row-gap, 12px);
   padding: 8px 12px;
+}
+
+.tube-row {
+  display: flex;
+  align-items: flex-end; justify-content: center;
+  column-gap: var(--tube-gap, 12px);
 }
 
 /* ---- Tube Wrapper ---- */
@@ -237,9 +242,10 @@ body.colorblind .cb-src { display: block; }
 
 /* ---- Tutorial bar ---- */
 #tutorial-bar {
-  position: absolute; bottom: 0; left: 0; right: 0;
+  position: relative;
+  flex-shrink: 0;
   display: flex; align-items: center; justify-content: center; gap: 12px;
-  padding: 12px 16px;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
   background: rgba(20,20,50,0.94); backdrop-filter: blur(8px);
   border-top: 1px solid rgba(79,195,247,0.25);
   z-index: 50;
@@ -499,40 +505,156 @@ body.reduce-effects .twinkle-star { animation: none !important; opacity: 0.3; }
 }
 
 /* ============================================================
-   STUCK RESCUE BANNER
+   EXTRA "+" TUBE SLOT & STUCK PULSE
    ============================================================ */
-.stuck-banner {
+.tube-plus-slot {
+  opacity: 0.68;
+  transition: opacity 0.2s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.tube-plus-slot:hover {
+  opacity: 0.9;
+}
+.tube-plus-slot:active {
+  transform: scale(0.95);
+}
+.tube-plus-slot.is-busy {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.plus-slot-meta {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 11px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.plus-cost-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 6px;
+  font-size: clamp(8px, calc(var(--tube-w, 44px) * 0.21), 11px);
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  line-height: 1.25;
+  text-transform: uppercase;
+  background: rgba(79, 195, 247, 0.22);
+  color: #8ce0ff;
+  border: 1px solid rgba(79, 195, 247, 0.45);
+}
+.plus-cost-badge.cost-free {
+  background: rgba(46, 204, 113, 0.22);
+  color: #8ff0b4;
+  border-color: rgba(46, 204, 113, 0.5);
+}
+.plus-cost-badge.cost-coins {
+  background: rgba(255, 217, 59, 0.20);
+  color: #ffe270;
+  border-color: rgba(255, 217, 59, 0.5);
+}
+
+.plus-left-badge {
+  font-size: clamp(7px, calc(var(--tube-w, 44px) * 0.17), 9.5px);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+/* Stuck pulse + tooltip on "+" slot */
+@keyframes plusStuckPulse {
+  0%, 100% {
+    filter: drop-shadow(0 0 6px rgba(79, 195, 247, 0.55));
+    transform: scale(1);
+  }
+  50% {
+    filter: drop-shadow(0 0 16px rgba(79, 195, 247, 0.95));
+    transform: scale(1.05);
+  }
+}
+
+.tube-plus-slot.is-stuck {
+  opacity: 1;
+}
+.tube-plus-slot.is-stuck .tube-canvas {
+  animation: plusStuckPulse 1.3s ease-in-out infinite;
+}
+.tube-plus-slot.is-stuck .plus-cost-badge {
+  box-shadow: 0 0 10px rgba(79, 195, 247, 0.45);
+}
+
+.plus-stuck-tooltip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 0;
+  background: rgba(18, 30, 58, 0.96);
+  color: #9be4ff;
+  border: 1px solid rgba(79, 195, 247, 0.6);
+  border-radius: 9px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 40;
+}
+.plus-stuck-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  right: 16px;
+  border: 5px solid transparent;
+  border-top-color: rgba(79, 195, 247, 0.6);
+}
+.tube-plus-slot.is-stuck .plus-stuck-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Smooth FLIP re-flow & pop-in animation for added empty tubes */
+.tube-wrapper {
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes tubePopIn {
+  0%   { transform: scale(0.2) translateY(16px); opacity: 0; }
+  65%  { transform: scale(1.1) translateY(-3px); opacity: 1; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+.tube-wrapper.tube-pop-in {
+  animation: tubePopIn 0.38s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Debug overlay (?debug=tubes) */
+.debug-tubes-overlay {
   position: fixed;
-  bottom: 0;
+  bottom: calc(6px + env(safe-area-inset-bottom, 0px));
   left: 50%;
-  transform: translateX(-50%) translateY(100%);
-  transition: transform 0.38s cubic-bezier(0.34, 1.56, 0.64, 1);
-  background: rgba(20, 20, 50, 0.96);
-  border-radius: 18px 18px 0 0;
-  padding: 14px 16px calc(18px + env(safe-area-inset-bottom, 0px));
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  z-index: 180;
-  max-width: 440px;
-  width: 100%;
-  box-sizing: border-box;
-  border-top: 2px solid rgba(79, 195, 247, 0.35);
-  box-shadow: 0 -4px 24px rgba(0,0,0,0.5);
-  pointer-events: auto;
+  transform: translateX(-50%);
+  max-width: 96vw;
+  background: rgba(8, 12, 24, 0.88);
+  color: #8ce0ff;
+  border: 1px solid rgba(79, 195, 247, 0.35);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 190;
+  pointer-events: none;
 }
-.stuck-banner.visible {
-  transform: translateX(-50%) translateY(0);
-}
-.stuck-banner.hidden {
-  display: none;
-}
-.stuck-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
+
+/* Win overlay extra-tube icon */
 .tube-icon-svg {
   width: 16px;
   height: 28px;
@@ -543,82 +665,6 @@ body.reduce-effects .twinkle-star { animation: none !important; opacity: 0.3; }
   height: 21px;
   color: #CFCFCF;
 }
-#stuck-banner-msg {
-  flex: 1;
-  font-size: 14px;
-  font-weight: 600;
-  color: rgba(255,255,255,0.92);
-  line-height: 1.3;
-}
-.stuck-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-.stuck-add-btn {
-  min-width: 0;
-  min-height: 40px;
-  flex-shrink: 0;
-  background: linear-gradient(135deg, #4fc3f7, #2F7DF6);
-  color: #fff;
-  border: none;
-  border-radius: 10px;
-  padding: 8px 12px;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  letter-spacing: 0.02em;
-  box-shadow: 0 2px 10px rgba(79,195,247,0.4);
-  transition: transform 0.12s, opacity 0.12s;
-}
-.stuck-add-btn:active { transform: scale(0.95); opacity: 0.85; }
-.stuck-coins-btn {
-  min-width: 0;
-  min-height: 40px;
-  flex-shrink: 0;
-  background: rgba(255, 193, 7, 0.16);
-  color: #ffd54f;
-  border: 1px solid rgba(255, 193, 7, 0.45);
-  border-radius: 10px;
-  padding: 8px 10px;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: transform 0.12s, opacity 0.12s;
-}
-.stuck-coins-btn:active { transform: scale(0.95); opacity: 0.85; }
-.stuck-add-btn:disabled,
-.stuck-coins-btn:disabled { opacity: 0.45; cursor: default; }
-.stuck-dismiss {
-  flex-shrink: 0;
-  min-width: 36px;
-  min-height: 36px;
-  background: none;
-  border: none;
-  color: rgba(255,255,255,0.45);
-  font-size: 18px;
-  cursor: pointer;
-  padding: 4px 6px;
-  line-height: 1;
-  transition: color 0.15s;
-}
-.stuck-dismiss:hover { color: rgba(255,255,255,0.80); }
-
-/* Smooth reflow & pop-in animation for extra tube wrapper */
-.tube-wrapper {
-  transition: width 0.25s ease, height 0.25s ease;
-}
-@keyframes tubePopIn {
-  0%   { transform: scale(0) translateY(20px); opacity: 0; }
-  60%  { transform: scale(1.12) translateY(-4px); opacity: 1; }
-  100% { transform: scale(1) translateY(0); opacity: 1; }
-}
-.tube-wrapper.tube-pop-in {
-  animation: tubePopIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-}
-
-/* Win overlay extra-tube icon */
 .win-info-row {
   display: flex;
   align-items: center;
@@ -640,12 +686,18 @@ body.reduce-effects .twinkle-star { animation: none !important; opacity: 0.3; }
   border: 1px solid rgba(79, 195, 247, 0.30);
 }
 
-body.reduce-effects .stuck-banner,
-body.reduce-effects .tube-wrapper { transition: none !important; }
-body.reduce-effects .tube-wrapper.tube-pop-in { animation: none !important; }
+body.reduce-effects .tube-wrapper,
+body.reduce-effects .tube-plus-slot,
+body.reduce-effects .plus-stuck-tooltip { transition: none !important; }
+body.reduce-effects .tube-wrapper.tube-pop-in,
+body.reduce-effects .tube-plus-slot.is-stuck .tube-canvas { animation: none !important; }
+body.reduce-effects .tube-plus-slot.is-stuck .tube-canvas { filter: drop-shadow(0 0 8px rgba(79, 195, 247, 0.8)); }
 
 @media (prefers-reduced-motion: reduce) {
-  .stuck-banner,
-  .tube-wrapper { transition: none !important; }
-  .tube-wrapper.tube-pop-in { animation: none !important; }
+  .tube-wrapper,
+  .tube-plus-slot,
+  .plus-stuck-tooltip { transition: none !important; }
+  .tube-wrapper.tube-pop-in,
+  .tube-plus-slot.is-stuck .tube-canvas { animation: none !important; }
+  .tube-plus-slot.is-stuck .tube-canvas { filter: drop-shadow(0 0 8px rgba(79, 195, 247, 0.8)); }
 }
