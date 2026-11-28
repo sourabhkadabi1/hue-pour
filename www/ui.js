@@ -217,6 +217,20 @@ const Sound = (() => {
       ambOscs = null;
     },
 
+    coin() {
+      if (!enabled) return; ensure();
+      const t = actx.currentTime;
+      osc(1318.51, 0.10, 'triangle', 0.14, t);
+      osc(1760.00, 0.18, 'sine',     0.15, t + 0.06);
+    },
+
+    coinSpend() {
+      if (!enabled) return; ensure();
+      const t = actx.currentTime;
+      osc(987.77, 0.07, 'triangle', 0.10, t);
+      osc(783.99, 0.10, 'sine',     0.08, t + 0.05);
+    },
+
     pentatonic, victoryArpeggio, whoosh, ding, btnClick,
   };
 })();
@@ -1505,12 +1519,15 @@ let _st = {
   moveCount: 0, history: [], selectedTube: -1,
   animating: false, won: false,
   undosLeft: 3, FREE_UNDOS: 3,
+  hintsLeft: 1, FREE_HINTS: 1,
   dailyDayNum: 0, dailySeed: 0,
   challengeCode: '', challengeSeed: 0, challengeDiff: 0,
   tutorialActive: false, hintMove: null,
   levelsCompleted: 0,
   _currentSeed: 0, _currentDiff: 1,
   _winCode: '', _winStars: 1,
+  _lastWinCoins: null, _winCoinsDoubled: false,
+  _lastWonLevelNum: null, _lastWonIsFinale: false,
   _jumpLevel: 0, _forcedSeed: undefined,
   // ---- extra "+" slot & stuck state ----
   stuckStatus:      'unknown',  // 'yes' | 'no' | 'unknown'
@@ -1520,6 +1537,10 @@ let _st = {
   _forceStuck:      false,
   _debugTubes:      false,
   _addingTube:      false,
+  _buyingUndo:      false,
+  _buyingHint:      false,
+  _watchingFreeAd:  false,
+  _doublingCoins:   false,
   _stuckCheckSeq:   0,
   _levelConfig:     null,
 };
@@ -1545,7 +1566,15 @@ const dom = {
   hudLevel:         $('hud-level'),
   hudMoves:         $('hud-moves'),
   hudPar:           $('hud-par'),
+  hudWallet:        $('hud-wallet'),
+  hudCoinsNum:      $('hud-coins-num'),
   undoCount:        $('undo-count'),
+  hintCount:        $('hint-count'),
+  homeWallet:       $('home-wallet'),
+  homeCoinsNum:     $('home-coins-num'),
+  btnHomeFreeCoins: $('btn-home-free-coins'),
+  homeAdMeta:       $('home-ad-meta'),
+  btnHomeShop:      $('btn-home-shop'),
   btnBack:          $('btn-back'),
   btnUndo:          $('btn-undo'),
   btnHint:          $('btn-hint'),
@@ -1591,22 +1620,37 @@ const dom = {
   winStarfield:     $('win-starfield'),
   winExtraBadge:    $('win-extra-badge'),
   dailyExtraBadge:  $('daily-extra-badge'),
+  winCoinsRow:      $('win-coins-row'),
+  winCoinsText:     $('win-coins-text'),
+  btnWinDoubleCoins:$('btn-win-double-coins'),
+  dailyCoinsRow:    $('daily-coins-row'),
+  dailyCoinsText:   $('daily-coins-text'),
+  btnDailyDoubleCoins: $('btn-daily-double-coins'),
+  shopOverlay:      $('shop-overlay'),
+  shopWallet:       $('shop-wallet'),
+  shopCoinsNum:     $('shop-coins-num'),
+  btnShopFreeCoins: $('btn-shop-free-coins'),
+  shopAdMeta:       $('shop-ad-meta'),
+  shopPalettesList: $('shop-palettes-list'),
+  btnCloseShop:     $('btn-close-shop'),
   debugTubesOverlay:$('debug-tubes-overlay'),
 };
 
 /* ---- init ---- */
 function _init() {
+  Monetization.init();
   _loadSave();
   _parseURL();
   _applySettings();
   _bindEvents();
-  Monetization.init();
   _updateHome();
+  _refreshWalletUI(false);
   _initOverlay();
   _initBg();
   _updateProgress();
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { /* pause idle */ }
+    if (document.hidden) { _stopAdCooldownTimer(); }
+    else { _updateRewardedAdButtons(); }
   });
   window.addEventListener('resize', () => {
     _initOverlay();
@@ -1621,6 +1665,14 @@ function _parseURL() {
   if (p.has('level')) { const n=parseInt(p.get('level'),10); if(n>0){_st.levelNum=n;_st._jumpLevel=n;} }
   if (p.has('seed')) _st._forcedSeed = parseInt(p.get('seed'),10);
   if (p.has('slowmo')) _slowmo = parseFloat(p.get('slowmo')) || 1.0;
+  if (p.has('coins')) {
+    const c = parseInt(p.get('coins'), 10);
+    const coinMod = _getCoinModule();
+    if (coinMod && Number.isFinite(c) && c >= 0) {
+      if (coinMod.setBalance) coinMod.setBalance(c);
+      else coinMod.earn(c);
+    }
+  }
   const dbg = p.get('debug');
   if (dbg === 'levels') _debugPrintLevels();
   if (dbg === 'tubes') _st._debugTubes = true;
@@ -1729,12 +1781,332 @@ function _bindEvents() {
     Toast.show(Monetization.isAdsRemoved() ? 'Purchases restored!' : 'No purchases found');
   });
   dom.btnCloseSettings.addEventListener('click', () => { _showOverlay(dom.settingsOverlay,false); _persist(); });
+  if (dom.homeWallet)       dom.homeWallet.addEventListener('click', () => { Sound.select(); _openShop(); });
+  if (dom.btnHomeShop)      dom.btnHomeShop.addEventListener('click', () => { Sound.select(); _openShop(); });
+  if (dom.btnCloseShop)     dom.btnCloseShop.addEventListener('click', () => { Sound.select(); _closeShop(); });
+  if (dom.btnHomeFreeCoins) dom.btnHomeFreeCoins.addEventListener('click', () => _onWatchFreeCoinsAd(dom.btnHomeFreeCoins));
+  if (dom.btnShopFreeCoins) dom.btnShopFreeCoins.addEventListener('click', () => _onWatchFreeCoinsAd(dom.btnShopFreeCoins));
+  if (dom.btnWinDoubleCoins)   dom.btnWinDoubleCoins.addEventListener('click',   () => _onDoubleWinCoins(false));
+  if (dom.btnDailyDoubleCoins) dom.btnDailyDoubleCoins.addEventListener('click', () => _onDoubleWinCoins(true));
   document.addEventListener('pointerdown', e => { if (e.target.closest('button')) Sound.btnClick(); });
 }
 
 function _showOverlay(el, show) {
+  if (!el) return;
   el.classList.toggle('hidden', !show);
   el.setAttribute('aria-hidden', String(!show));
+}
+
+/* ===================================================================
+   ECONOMY UI: WALLET, FLYING COINS, REWARDED ADS & SHOP
+   =================================================================== */
+let _walletRafId = null;
+let _adCooldownTimer = null;
+const _coinFx = { timers: [], nodes: [] };
+
+function _economyCfg() {
+  return (typeof Economy !== 'undefined' && Economy.CONFIG) ? Economy.CONFIG : null;
+}
+
+function _getCoinBalance() {
+  const mod = _getCoinModule();
+  return mod && mod.getBalance ? mod.getBalance() : 0;
+}
+
+function _setWalletNumbers(val) {
+  const txt = String(Math.max(0, Math.round(val)));
+  if (dom.homeCoinsNum) dom.homeCoinsNum.textContent = txt;
+  if (dom.hudCoinsNum)  dom.hudCoinsNum.textContent  = txt;
+  if (dom.shopCoinsNum) dom.shopCoinsNum.textContent = txt;
+}
+
+function _refreshWalletUI(immediate) {
+  if (immediate === true && _walletRafId) {
+    cancelAnimationFrame(_walletRafId);
+    _walletRafId = null;
+  }
+  if (!_walletRafId) _setWalletNumbers(_getCoinBalance());
+}
+
+function _bumpVisibleWallet() {
+  const pills = [dom.shopWallet, dom.hudWallet, dom.homeWallet];
+  for (let i = 0; i < pills.length; i++) {
+    const el = pills[i];
+    if (!el || _reducedMotion()) continue;
+    el.classList.remove('wallet-bump');
+    void el.offsetWidth;
+    el.classList.add('wallet-bump');
+  }
+}
+
+function _animateWalletCount(fromBal, toBal) {
+  if (_walletRafId) { cancelAnimationFrame(_walletRafId); _walletRafId = null; }
+  if (_reducedMotion() || fromBal === toBal) {
+    _setWalletNumbers(toBal);
+    return;
+  }
+  const start = performance.now();
+  const dur = 480;
+  function step(now) {
+    const t = Math.min(1, (now - start) / dur);
+    const eased = 1 - Math.pow(1 - t, 3);
+    _setWalletNumbers(Math.round(fromBal + (toBal - fromBal) * eased));
+    if (t < 1) {
+      _walletRafId = requestAnimationFrame(step);
+    } else {
+      _walletRafId = null;
+      _setWalletNumbers(toBal);
+      _bumpVisibleWallet();
+    }
+  }
+  _walletRafId = requestAnimationFrame(step);
+}
+
+function _pickVisibleWalletEl() {
+  if (dom.shopOverlay && !dom.shopOverlay.classList.contains('hidden') && dom.shopWallet) return dom.shopWallet;
+  if (dom.app && !dom.app.classList.contains('hidden') && dom.hudWallet) return dom.hudWallet;
+  return dom.homeWallet || dom.hudWallet || null;
+}
+
+function _cleanupCoinFx() {
+  if (_walletRafId) { cancelAnimationFrame(_walletRafId); _walletRafId = null; }
+  while (_coinFx.timers.length) clearTimeout(_coinFx.timers.pop());
+  while (_coinFx.nodes.length) {
+    const n = _coinFx.nodes.pop();
+    if (n && n.parentNode) n.parentNode.removeChild(n);
+  }
+}
+
+function _flyCoinsToWallet(originEl, count) {
+  if (_reducedMotion() || typeof document === 'undefined' || !document.body) return;
+  const targetEl = _pickVisibleWalletEl();
+  if (!targetEl || !targetEl.getBoundingClientRect) return;
+  const dstRect = targetEl.getBoundingClientRect();
+  if (!dstRect || (dstRect.width === 0 && dstRect.height === 0)) return;
+  const dstX = dstRect.left + dstRect.width / 2;
+  const dstY = dstRect.top + dstRect.height / 2;
+
+  let srcX = window.innerWidth / 2;
+  let srcY = window.innerHeight * 0.55;
+  if (originEl && originEl.getBoundingClientRect) {
+    const r = originEl.getBoundingClientRect();
+    if (r.width > 0 || r.height > 0) {
+      srcX = r.left + r.width / 2;
+      srcY = r.top + r.height / 2;
+    }
+  }
+
+  const total = Math.max(3, Math.min(8, count || 5));
+  for (let i = 0; i < total; i++) {
+    const coin = document.createElement('div');
+    coin.className = 'flying-coin';
+    coin.innerHTML =
+      '<svg class="coin-icon-svg" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">' +
+        '<circle cx="12" cy="12" r="10" fill="#ffd54f" stroke="#f57f17" stroke-width="1.8"/>' +
+        '<circle cx="12" cy="12" r="7" fill="none" stroke="#fff8e1" stroke-opacity="0.6" stroke-width="1.2"/>' +
+        '<path d="M12 7.2C13.9 10 15.2 11.7 15.2 13.4a3.2 3.2 0 1 1-6.4 0c0-1.7 1.3-3.4 3.2-6.2z" fill="#ff8f00"/>' +
+      '</svg>';
+    const jitterX = (Math.random() - 0.5) * 34;
+    const jitterY = (Math.random() - 0.5) * 20;
+    const sx = srcX + jitterX;
+    const sy = srcY + jitterY;
+    coin.style.transform = 'translate3d(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px,0) scale(0.7)';
+    coin.style.opacity = '0';
+    document.body.appendChild(coin);
+    _coinFx.nodes.push(coin);
+
+    const delay = i * 55;
+    const launchId = setTimeout(() => {
+      if (!coin.parentNode) return;
+      coin.style.transition = 'transform 0.52s cubic-bezier(0.22, 0.8, 0.32, 1), opacity 0.14s ease-out';
+      coin.style.opacity = '1';
+      void coin.offsetWidth;
+      coin.style.transform = 'translate3d(' + dstX.toFixed(1) + 'px,' + dstY.toFixed(1) + 'px,0) scale(0.85)';
+      const endId = setTimeout(() => {
+        if (coin.parentNode) coin.parentNode.removeChild(coin);
+        const idx = _coinFx.nodes.indexOf(coin);
+        if (idx >= 0) _coinFx.nodes.splice(idx, 1);
+      }, 550);
+      _coinFx.timers.push(endId);
+    }, delay);
+    _coinFx.timers.push(launchId);
+  }
+}
+
+function _onCoinBalanceChanged() {
+  _refreshWalletUI(false);
+  if (_st.mode !== 'home') {
+    _renderHUD();
+    _updatePlusSlotVisual();
+  }
+  if (dom.shopOverlay && !dom.shopOverlay.classList.contains('hidden')) {
+    _renderShop();
+  }
+}
+
+function _creditCoinsWithFX(amount, originEl) {
+  const coinMod = _getCoinModule();
+  if (!coinMod || amount <= 0) return _getCoinBalance();
+  const prev = coinMod.getBalance();
+  const next = coinMod.earn(amount);
+  Sound.coin();
+  _animateWalletCount(prev, next);
+  _flyCoinsToWallet(originEl, Math.ceil(amount / 15));
+  _onCoinBalanceChanged();
+  return next;
+}
+
+function _stopAdCooldownTimer() {
+  if (_adCooldownTimer) {
+    clearInterval(_adCooldownTimer);
+    _adCooldownTimer = null;
+  }
+}
+
+function _updateRewardedAdButtons() {
+  if (typeof Economy === 'undefined' || !Economy.getRewardedAdState) return;
+  const st = Economy.getRewardedAdState();
+  const pairs = [
+    { btn: dom.btnHomeFreeCoins, meta: dom.homeAdMeta },
+    { btn: dom.btnShopFreeCoins, meta: dom.shopAdMeta },
+  ];
+  for (let i = 0; i < pairs.length; i++) {
+    const btn = pairs[i].btn, meta = pairs[i].meta;
+    if (!btn) continue;
+    const main = btn.querySelector('.reward-btn-main');
+    if (main) main.textContent = 'Watch ad: +' + st.rewardAmount + ' coins';
+    if (st.remainingToday <= 0) {
+      btn.disabled = true;
+      if (meta) meta.textContent = '0/' + st.dailyLimit + ' today';
+    } else if (st.cooldownRemainingSec > 0) {
+      btn.disabled = true;
+      if (meta) meta.textContent = 'Wait ' + st.cooldownRemainingSec + 's';
+    } else {
+      btn.disabled = !!_st._watchingFreeAd;
+      if (meta) meta.textContent = st.remainingToday + '/' + st.dailyLimit + ' today';
+    }
+  }
+  const needsTicker = st.remainingToday > 0 && st.cooldownRemainingMs > 0 &&
+    (!dom.homeScreen.classList.contains('hidden') ||
+     (dom.shopOverlay && !dom.shopOverlay.classList.contains('hidden')));
+  if (needsTicker && !_adCooldownTimer) {
+    _adCooldownTimer = setInterval(() => _updateRewardedAdButtons(), 1000);
+  } else if (!needsTicker) {
+    _stopAdCooldownTimer();
+  }
+}
+
+async function _onWatchFreeCoinsAd(originEl) {
+  if (_st._watchingFreeAd || typeof Economy === 'undefined') return;
+  const st = Economy.getRewardedAdState();
+  if (!st.canWatch) {
+    Toast.show(st.remainingToday <= 0
+      ? 'Daily limit reached (' + st.dailyLimit + '/day)'
+      : 'Wait ' + st.cooldownRemainingSec + 's before watching again');
+    _updateRewardedAdButtons();
+    return;
+  }
+  _st._watchingFreeAd = true;
+  _updateRewardedAdButtons();
+  let ok = false;
+  try {
+    ok = await Monetization.showRewarded('coins_150');
+  } finally {
+    _st._watchingFreeAd = false;
+  }
+  if (!ok) { _updateRewardedAdButtons(); return; }
+  const prevBal = _getCoinBalance();
+  const res = Economy.recordRewardedAdCoinClaim();
+  if (res.ok) {
+    Sound.coin();
+    _animateWalletCount(prevBal, res.balance);
+    _flyCoinsToWallet(originEl, 6);
+    _onCoinBalanceChanged();
+    Toast.show('+' + res.earned + ' coins!');
+  } else {
+    Toast.show('Ad reward unavailable right now');
+  }
+  _updateRewardedAdButtons();
+}
+
+function _renderShop() {
+  _refreshWalletUI(false);
+  _updateRewardedAdButtons();
+  if (!dom.shopPalettesList || typeof Economy === 'undefined' || !Economy.getPalettes) return;
+  const pals = Economy.getPalettes();
+  const bal = _getCoinBalance();
+  dom.shopPalettesList.innerHTML = '';
+  for (let i = 0; i < pals.length; i++) {
+    const p = pals[i];
+    const row = document.createElement('div');
+    row.className = 'shop-item' + (p.active ? ' is-active' : '');
+
+    const info = document.createElement('div');
+    info.className = 'shop-item-info';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'shop-item-name';
+    nameEl.textContent = p.name;
+    const descEl = document.createElement('div');
+    descEl.className = 'shop-item-desc';
+    descEl.textContent = p.desc;
+    const sw = document.createElement('div');
+    sw.className = 'shop-swatches';
+    for (let j = 0; j < p.swatches.length; j++) {
+      const box = document.createElement('span');
+      box.className = 'shop-swatch';
+      box.style.background = p.swatches[j];
+      sw.appendChild(box);
+    }
+    info.appendChild(nameEl); info.appendChild(descEl); info.appendChild(sw);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-shop-action';
+    if (p.active) {
+      btn.classList.add('is-active');
+      btn.textContent = 'Active ✓';
+      btn.disabled = true;
+    } else if (p.owned) {
+      btn.classList.add('is-owned');
+      btn.textContent = 'Equip';
+      btn.addEventListener('click', () => {
+        Sound.select();
+        Economy.selectPalette(p.id);
+        Toast.show('Equipped ' + p.name);
+        _renderShop();
+      });
+    } else {
+      btn.textContent = p.price + ' coins';
+      if (bal < p.price) btn.disabled = true;
+      btn.addEventListener('click', () => {
+        const prev = _getCoinBalance();
+        const res = Economy.buyPalette(p.id);
+        if (!res.ok) {
+          Toast.show('Need ' + p.price + ' coins');
+          return;
+        }
+        Sound.coinSpend();
+        _animateWalletCount(prev, res.balance);
+        _onCoinBalanceChanged();
+        Toast.show('Unlocked ' + p.name + '!');
+        _renderShop();
+      });
+    }
+    row.appendChild(info);
+    row.appendChild(btn);
+    dom.shopPalettesList.appendChild(row);
+  }
+}
+
+function _openShop() {
+  _renderShop();
+  _showOverlay(dom.shopOverlay, true);
+  _updateRewardedAdButtons();
+}
+
+function _closeShop() {
+  _showOverlay(dom.shopOverlay, false);
+  _updateRewardedAdButtons();
 }
 
 /* ---- home ---- */
@@ -1747,6 +2119,8 @@ function _updateHome() {
   } else { dom.homeStreak.classList.add('hidden'); }
   dom.btnDaily.textContent = _daily.results[_todayStr()]
     ? '📅 Daily ✓ Done' : '📅 Daily Puzzle';
+  _refreshWalletUI(false);
+  _updateRewardedAdButtons();
   _updateProgress();
 }
 
@@ -1755,6 +2129,7 @@ function _goHome() {
   _st.mode = 'home'; _st.animating = false; _st.won = false; _st.hintMove = null;
   _anim = null;
   if (_movesTimer) { clearInterval(_movesTimer); _movesTimer = null; }
+  _cleanupCoinFx();
   if (_celeb) {
     try { document.removeEventListener('pointerdown', _skipCelebration); } catch(e){}
     _celeb = null;
@@ -1770,6 +2145,7 @@ function _goHome() {
   _showOverlay(dom.winOverlay, false);
   _showOverlay(dom.dailyDoneOverlay, false);
   _showOverlay(dom.shareOverlay, false);
+  _showOverlay(dom.shopOverlay, false);
   dom.tutorialBar.classList.add('hidden');
   _updateHome(); _persist();
 }
@@ -1785,10 +2161,17 @@ function _showGame(title) {
 
 /** Shared session initializer used across Campaign, Daily, and Challenge modes. */
 function _initPlaySession(lv, config, title) {
+  const cfg = _economyCfg();
+  _st.FREE_UNDOS = cfg ? cfg.free.undosPerLevel : 3;
+  _st.FREE_HINTS = cfg ? cfg.free.hintsPerLevel : 1;
   _st.won = false; _st.moveCount = 0; _st.history = []; _st.selectedTube = -1;
-  _st.animating = false; _st.undosLeft = _st.FREE_UNDOS; _st.hintMove = null;
+  _st.animating = false; _st.undosLeft = _st.FREE_UNDOS; _st.hintsLeft = _st.FREE_HINTS;
+  _st.hintMove = null;
+  _st._lastWinCoins = null; _st._winCoinsDoubled = false;
+  _st._lastWonLevelNum = null; _st._lastWonIsFinale = false;
   _waves = {}; _anim = null;
   if (_movesTimer) { clearInterval(_movesTimer); _movesTimer = null; }
+  _stopAdCooldownTimer();
   _st.tubes = lv.tubes; _st.target = lv.target; _st.par = lv.par;
   _st.initialTubes = cloneTubes(lv.tubes);
   _st.forwardMoves = lv.forwardMoves || [];
@@ -1800,6 +2183,7 @@ function _initPlaySession(lv, config, title) {
   _st._currentDiff = lv.target.length;
   _resetStuckState();
   _showGame(title);
+  _refreshWalletUI(false);
   _renderAll();
   _updatePlusSlotVisual();
   _updateDebugTubesOverlay();
@@ -1893,9 +2277,21 @@ function _skipTut() {
 function _renderAll() { _renderHUD(); _renderTarget(); _renderTubesAll(); }
 
 function _renderHUD() {
+  const cfg = _economyCfg();
+  const undoCost = cfg ? cfg.spend.extraUndos : 30;
+  const hintCost = cfg ? cfg.spend.extraHint : 40;
+  const bal = _getCoinBalance();
   dom.hudMoves.textContent = 'Moves: ' + _st.moveCount;
   dom.hudPar.textContent   = 'Par: '   + _st.par;
-  dom.undoCount.textContent = '(' + _st.undosLeft + ')';
+  dom.undoCount.textContent = _st.undosLeft > 0
+    ? '(' + _st.undosLeft + ')'
+    : (bal >= undoCost ? '(' + undoCost + ')' : '(Ad)');
+  if (dom.hintCount) {
+    dom.hintCount.textContent = _st.hintsLeft > 0
+      ? '(' + _st.hintsLeft + ')'
+      : (bal >= hintCost ? '(' + hintCost + ')' : '(Ad)');
+  }
+  _refreshWalletUI(false);
 }
 
 function _renderTarget() {
@@ -2018,19 +2414,38 @@ function _onWin() {
   const code = encodeChallenge(_st._currentSeed, _st._currentDiff);
 
   _st._winCode = code; _st._winStars = stars;
+  const wonLevelNum = _st.mode === 'level' ? _st.levelNum : null;
+  const wonIsFinale = _st.mode === 'level' && !!(_st._levelConfig && _st._levelConfig.isFinale);
+  _st._lastWonLevelNum = wonLevelNum;
+  _st._lastWonIsFinale = wonIsFinale;
 
   if (_st.mode === 'daily') {
     const ts = _todayStr();
-    _daily.results[ts] = { moves, par, stars, code, dayNum: _st.dailyDayNum, usedExtraTube };
     const yesterday = _dateStr(new Date(Date.now()-86400000));
     if (_daily.lastDate === yesterday || _daily.lastDate === ts) _daily.streak++;
     else _daily.streak = 1;
     _daily.lastDate = ts;
+    const dEarn = typeof Economy !== 'undefined'
+      ? Economy.calcDailyEarn(_daily.streak)
+      : { total: 30 + Math.min(50, _daily.streak * 5), base: 30, streakBonus: Math.min(50, _daily.streak * 5) };
+    _daily.results[ts] = {
+      moves, par, stars, code, dayNum: _st.dailyDayNum, usedExtraTube,
+      coinsEarned: dEarn.total, coinsDoubled: false,
+    };
+    _st._lastWinCoins = dEarn;
+    _st._winCoinsDoubled = false;
+    _creditCoinsWithFX(dEarn.total, dom.tubeArea);
   } else {
     const prev = _best[_st.levelNum];
     if (!prev || stars>prev.stars || (stars===prev.stars && moves<prev.moves))
       _best[_st.levelNum] = { moves, stars };
     if (_st.mode === 'level') { _st.levelNum++; _checkMilestone(); }
+    const lEarn = typeof Economy !== 'undefined'
+      ? Economy.calcLevelEarn({ stars, isFinale: wonIsFinale })
+      : { win: 10, starBonus: stars === 3 ? 10 : 0, finaleBonus: wonIsFinale ? 100 : 0, total: 10 + (stars === 3 ? 10 : 0) + (wonIsFinale ? 100 : 0) };
+    _st._lastWinCoins = lEarn;
+    _st._winCoinsDoubled = false;
+    _creditCoinsWithFX(lEarn.total, dom.tubeArea);
   }
   _persist();
 
@@ -2041,13 +2456,22 @@ function _onDailyWin(moves, par, stars, code) {
   const ts = _todayStr();
   const usedExtraTube = _st.usedExtraTube;
   if (usedExtraTube) stars = Math.min(stars, 2);
-  _daily.results[ts] = { moves, par, stars, code, dayNum: _st.dailyDayNum, usedExtraTube };
   const yesterday = _dateStr(new Date(Date.now()-86400000));
   if (_daily.lastDate === yesterday || _daily.lastDate === ts) _daily.streak++;
   else _daily.streak = 1;
   _daily.lastDate = ts; _st._winCode = code; _st._winStars = stars;
+  const dEarn = typeof Economy !== 'undefined'
+    ? Economy.calcDailyEarn(_daily.streak)
+    : { total: 30 + Math.min(50, _daily.streak * 5), base: 30, streakBonus: Math.min(50, _daily.streak * 5) };
+  _daily.results[ts] = {
+    moves, par, stars, code, dayNum: _st.dailyDayNum, usedExtraTube,
+    coinsEarned: dEarn.total, coinsDoubled: false,
+  };
+  _st._lastWinCoins = dEarn;
+  _st._winCoinsDoubled = false;
+  _creditCoinsWithFX(dEarn.total, dom.tubeArea);
   _persist();
-  setTimeout(() => { _showDailyDone({ moves, par, stars, code, dayNum: _st.dailyDayNum, usedExtraTube }); Sound.win(); }, 400);
+  setTimeout(() => { _showDailyDone(_daily.results[ts]); Sound.win(); }, 400);
 }
 
 function _showDailyDone(r) {
@@ -2055,10 +2479,66 @@ function _showDailyDone(r) {
   dom.dailyInfo.innerHTML = 'Moves: <strong>'+r.moves+'</strong> &nbsp;|&nbsp; Par: <strong>'+r.par+'</strong>';
   if (dom.dailyExtraBadge) dom.dailyExtraBadge.classList.toggle('hidden', !r.usedExtraTube);
   dom.dailyStreakLine.textContent = '🔥 ' + _daily.streak + ' day streak';
+  const earned = r.coinsEarned || 0;
+  if (dom.dailyCoinsRow && dom.dailyCoinsText) {
+    dom.dailyCoinsRow.classList.toggle('hidden', earned <= 0);
+    if (earned > 0) {
+      dom.dailyCoinsText.textContent = '+' + (r.coinsDoubled ? earned * 2 : earned) +
+        ' coins' + (r.coinsDoubled ? ' (2×!)' : '');
+    }
+  }
+  if (dom.btnDailyDoubleCoins) {
+    const canDouble = earned > 0 && !r.coinsDoubled;
+    dom.btnDailyDoubleCoins.classList.toggle('hidden', !canDouble);
+    dom.btnDailyDoubleCoins.disabled = false;
+    if (canDouble) dom.btnDailyDoubleCoins.textContent = 'Watch ad: double coins (+' + earned + ')';
+  }
   const now = new Date(), tmrw = new Date(now.getFullYear(),now.getMonth(),now.getDate()+1);
   const diff = tmrw-now, h=Math.floor(diff/3600000), m=Math.floor((diff%3600000)/60000), s=Math.floor((diff%60000)/1000);
   dom.dailyCountdownLine.textContent = 'Come back tomorrow! ⏱ '+h+'h '+m+'m '+s+'s';
   _showOverlay(dom.dailyDoneOverlay, true);
+}
+
+async function _onDoubleWinCoins(isDaily) {
+  if (_st._doublingCoins) return;
+  let bonus = 0;
+  if (isDaily) {
+    const r = _daily.results[_todayStr()];
+    if (!r || !r.coinsEarned || r.coinsDoubled) return;
+    bonus = r.coinsEarned;
+  } else {
+    if (!_st._lastWinCoins || !_st._lastWinCoins.total || _st._winCoinsDoubled) return;
+    bonus = _st._lastWinCoins.total;
+  }
+  _st._doublingCoins = true;
+  const btn = isDaily ? dom.btnDailyDoubleCoins : dom.btnWinDoubleCoins;
+  if (btn) btn.disabled = true;
+  let ok = false;
+  try {
+    ok = await Monetization.showRewarded('double_coins');
+  } finally {
+    _st._doublingCoins = false;
+  }
+  if (!ok) {
+    if (btn) btn.disabled = false;
+    return;
+  }
+  const originEl = btn || (isDaily ? dom.dailyCoinsRow : dom.winCoinsRow);
+  _creditCoinsWithFX(bonus, originEl);
+  if (isDaily) {
+    const r = _daily.results[_todayStr()];
+    if (r) {
+      r.coinsDoubled = true;
+      _persist();
+      if (dom.dailyCoinsText) dom.dailyCoinsText.textContent = '+' + (bonus * 2) + ' coins (2×!)';
+    }
+    if (dom.btnDailyDoubleCoins) dom.btnDailyDoubleCoins.classList.add('hidden');
+  } else {
+    _st._winCoinsDoubled = true;
+    if (dom.winCoinsText) dom.winCoinsText.textContent = '+' + (bonus * 2) + ' coins (2×!)';
+    if (dom.btnWinDoubleCoins) dom.btnWinDoubleCoins.classList.add('hidden');
+  }
+  Toast.show('Coins doubled! +' + bonus + ' bonus coins!');
 }
 
 function _renderStars(el, n) {
@@ -2093,9 +2573,26 @@ function _openShareCard() {
 
 /* ---- monetization ---- */
 async function _maybeInterstitial() {
-  if (_st.levelsCompleted<=5) return;
-  if (_st.levelsCompleted%4!==0) return;
-  await Monetization.showInterstitial();
+  if (_celeb) return false;
+  const lastRewardedAt = Monetization.getLastRewardedAt ? Monetization.getLastRewardedAt() : 0;
+  const allowed = typeof Economy !== 'undefined' && Economy.canShowInterstitial
+    ? Economy.canShowInterstitial({
+        adsRemoved:      Monetization.isAdsRemoved(),
+        isFinale:        !!_st._lastWonIsFinale,
+        isCelebrating:   !!_celeb,
+        levelsCompleted: _st.levelsCompleted,
+        levelNum:        _st._lastWonLevelNum,
+        lastRewardedAt:  lastRewardedAt,
+      })
+    : (!Monetization.isAdsRemoved() && _st.levelsCompleted > 5 && _st.levelsCompleted % 4 === 0 &&
+       !_st._lastWonIsFinale && !(_st._lastWonLevelNum && _st._lastWonLevelNum <= 5));
+  if (!allowed) return false;
+  return Monetization.showInterstitial({
+    isFinale:      !!_st._lastWonIsFinale,
+    isCelebrating: !!_celeb,
+    levelNum:      _st._lastWonLevelNum,
+    reason:        'level_complete',
+  });
 }
 async function _buyRemoveAds() {
   const ok = await Monetization.purchaseRemoveAds();
@@ -2103,43 +2600,96 @@ async function _buyRemoveAds() {
 }
 
 /* ---- undo ---- */
-function _onUndo() {
+function _applySingleUndo() {
+  _st.tubes = _st.history.pop();
+  _st.moveCount = Math.max(0, _st.moveCount - 1);
+  _st.selectedTube = -1; _st.undosLeft--; _st.hintMove = null; _waves = {};
+  _renderAll();
+  if (_st.tutorialActive) _showTutHint();
+  _scheduleStuckCheck();
+}
+
+async function _onUndo() {
   Sound.select();
-  if (_st.animating || _st.won) return;
-  if (_st.undosLeft > 0 && _st.history.length > 0) {
-    _st.tubes = _st.history.pop();
-    _st.moveCount = Math.max(0, _st.moveCount - 1);
-    _st.selectedTube = -1; _st.undosLeft--; _st.hintMove = null; _waves = {};
-    _renderAll();
-    if (_st.tutorialActive) _showTutHint();
-    _scheduleStuckCheck();
+  if (_st.animating || _st.won || _st._buyingUndo) return;
+  if (!_st.history.length) { Toast.show('Nothing to undo'); return; }
+  if (_st.undosLeft > 0) {
+    _applySingleUndo();
     return;
   }
-  if (!_st.history.length) { Toast.show('Nothing to undo'); return; }
-  Toast.show('Watch a short ad for 3 more undos');
-  Monetization.showRewarded().then(ok => {
-    if (ok) { _st.undosLeft += 3; Toast.show('+3 undos!'); _renderHUD(); }
-  });
+  const cfg = _economyCfg();
+  const cost = cfg ? cfg.spend.extraUndos : 30;
+  const pack = cfg ? cfg.spend.extraUndosCount : 3;
+  const coinMod = _getCoinModule();
+  if (coinMod && coinMod.getBalance() >= cost && coinMod.spend(cost)) {
+    Sound.coinSpend();
+    _st.undosLeft += pack;
+    _onCoinBalanceChanged();
+    _applySingleUndo();
+    Toast.show('-' + cost + ' coins · +' + pack + ' undos!');
+    return;
+  }
+  _st._buyingUndo = true;
+  Toast.show('Watch ad for ' + pack + ' more undos');
+  let ok = false;
+  try { ok = await Monetization.showRewarded('extra_undo'); }
+  finally { _st._buyingUndo = false; }
+  if (_st.won || _st.mode === 'home' || !ok) return;
+  _st.undosLeft += pack;
+  if (_st.history.length > 0) {
+    _applySingleUndo();
+    Toast.show('+' + pack + ' undos!');
+  } else {
+    _renderHUD();
+  }
 }
 
 /* ---- hint ---- */
-function _onHint() {
+function _showHintVisual(hint, suffix) {
+  _st.hintMove = hint; _renderTubesAll();
+  const st2 = tubeTop(_st.tubes[hint.src]);
+  const dstStr = _st.tubes[hint.dst].length ? COLOR_INFO[tubeTop(_st.tubes[hint.dst])].name : 'empty tube';
+  Toast.show('Try ' + COLOR_INFO[st2].name + ' → ' + dstStr + (suffix ? ' (' + suffix + ')' : ''), 3500);
+}
+
+async function _onHint() {
   Sound.select();
-  if (_st.animating || _st.won) return;
-  Toast.show('Watch a short ad for a hint');
-  Monetization.showRewarded().then(ok => {
-    if (!ok) return;
-    const hint = getHint(_st.tubes, _st.target, {
-      initialTubes: _st.initialTubes,
-      forwardMoves: _st.forwardMoves,
-    });
-    if (hint) {
-      _st.hintMove = hint; _renderTubesAll();
-      const st2=tubeTop(_st.tubes[hint.src]);
-      const dstStr=_st.tubes[hint.dst].length?COLOR_INFO[tubeTop(_st.tubes[hint.dst])].name:'empty tube';
-      Toast.show('Try '+COLOR_INFO[st2].name+' → '+dstStr, 3500);
-    } else { Toast.show('No hint available'); }
+  if (_st.animating || _st.won || _st._buyingHint) return;
+  const initialHint = getHint(_st.tubes, _st.target, {
+    initialTubes: _st.initialTubes,
+    forwardMoves: _st.forwardMoves,
   });
+  if (!initialHint) { Toast.show('No hint available'); return; }
+
+  if (_st.hintsLeft > 0) {
+    _st.hintsLeft--;
+    _renderHUD();
+    _showHintVisual(initialHint);
+    return;
+  }
+
+  const cfg = _economyCfg();
+  const cost = cfg ? cfg.spend.extraHint : 40;
+  const coinMod = _getCoinModule();
+  if (coinMod && coinMod.getBalance() >= cost && coinMod.spend(cost)) {
+    Sound.coinSpend();
+    _onCoinBalanceChanged();
+    _showHintVisual(initialHint, '-' + cost + ' coins');
+    return;
+  }
+
+  _st._buyingHint = true;
+  Toast.show('Watch ad for an extra hint');
+  let ok = false;
+  try { ok = await Monetization.showRewarded('extra_hint'); }
+  finally { _st._buyingHint = false; }
+  if (_st.won || _st.mode === 'home' || !ok) return;
+  const liveHint = getHint(_st.tubes, _st.target, {
+    initialTubes: _st.initialTubes,
+    forwardMoves: _st.forwardMoves,
+  });
+  if (liveHint) _showHintVisual(liveHint);
+  else Toast.show('No hint available');
 }
 
 /* ---- restart ---- */
@@ -2225,11 +2775,12 @@ function _getExtraPolicy() {
   const isFree = firstFreeEligible && _st.extraTubesAdded === 0;
   const coinMod = _getCoinModule();
   const coinBal = coinMod ? coinMod.getBalance() : 0;
-  const costLabel = isFree ? 'FREE' : (coinBal >= 100 ? '100' : 'AD');
+  const tubeCost = _economyCfg() ? _economyCfg().spend.extraTube : 100;
+  const costLabel = isFree ? 'FREE' : (coinBal >= tubeCost ? String(tubeCost) : 'AD');
   const hasPlusSlot = extrasLeft > 0;
   const slots = _st.tubes.length + (hasPlusSlot ? 1 : 0);
 
-  return { realm, extrasLeft, hasPlusSlot, isFree, costLabel, coinMod, coinBal, slots };
+  return { realm, extrasLeft, hasPlusSlot, isFree, costLabel, tubeCost, coinMod, coinBal, slots };
 }
 
 function _isPlusPulsing() {
@@ -2410,18 +2961,21 @@ async function _onAddPlusTube() {
   if (policy.extrasLeft <= 0) return;
 
   if (!policy.isFree) {
-    if (policy.costLabel === '100' && policy.coinMod) {
-      if (!policy.coinMod.spend(100)) {
+    const tubeCost = policy.tubeCost || 100;
+    if (policy.coinMod && policy.coinMod.getBalance() >= tubeCost) {
+      if (!policy.coinMod.spend(tubeCost)) {
         Toast.show('Not enough coins');
         _updatePlusSlotVisual();
         return;
       }
-      Toast.show('-100 coins · Extra tube added!');
+      Sound.coinSpend();
+      _onCoinBalanceChanged();
+      Toast.show('-' + tubeCost + ' coins · Extra tube added!');
     } else {
       _st._addingTube = true;
       _updatePlusSlotVisual(policy);
       let ok = false;
-      try { ok = await Monetization.showRewarded(); }
+      try { ok = await Monetization.showRewarded('extra_tube'); }
       finally {
         _st._addingTube = false;
         _updatePlusSlotVisual();
@@ -2477,6 +3031,7 @@ function _startCelebration(stars, moves, par, target, code, usedExtraTube) {
         _showWinOverlayAnimated(stars, moves, par, code,
           stars === 3 ? 'PERFECT!' : _CHEERS[Math.floor(Math.random()*_CHEERS.length)], usedExtraTube);
       }
+      _maybeInterstitial();
     }, 300);
     Sound.win();
     return;
@@ -2600,6 +3155,27 @@ function _showWinOverlayAnimated(stars, moves, par, code, cheer, usedExtraTube) 
   dom.winInfo.innerHTML = 'Moves: <strong>0</strong> &nbsp;|&nbsp; Par: <strong>' + par + '</strong>';
   if (dom.winExtraBadge) {
     dom.winExtraBadge.classList.toggle('hidden', !usedExtraTube);
+  }
+  if (dom.winCoinsRow && dom.winCoinsText) {
+    const wc = _st._lastWinCoins;
+    const total = wc ? wc.total : 0;
+    dom.winCoinsRow.classList.toggle('hidden', total <= 0);
+    if (total > 0) {
+      const parts = [];
+      if (wc.win) parts.push('+' + wc.win + ' win');
+      if (wc.starBonus) parts.push('+' + wc.starBonus + ' 3★');
+      if (wc.finaleBonus) parts.push('+' + wc.finaleBonus + ' finale');
+      const detail = parts.length > 1 ? ' (' + parts.join(', ') + ')' : '';
+      dom.winCoinsText.textContent = '+' + (_st._winCoinsDoubled ? total * 2 : total) + ' coins' +
+        (_st._winCoinsDoubled ? ' (2×!)' : detail);
+    }
+  }
+  if (dom.btnWinDoubleCoins) {
+    const wcTotal = _st._lastWinCoins ? _st._lastWinCoins.total : 0;
+    const showDouble = wcTotal > 0 && !_st._winCoinsDoubled;
+    dom.btnWinDoubleCoins.classList.toggle('hidden', !showDouble);
+    dom.btnWinDoubleCoins.disabled = false;
+    if (showDouble) dom.btnWinDoubleCoins.textContent = 'Watch ad: double coins (+' + wcTotal + ')';
   }
   if (!Monetization.isAdsRemoved() && _st.levelsCompleted > 5) dom.btnRemoveAdsWin.classList.remove('hidden');
   _showOverlay(dom.winOverlay, true);

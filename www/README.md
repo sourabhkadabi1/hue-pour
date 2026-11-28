@@ -6,15 +6,16 @@ A mobile-first, portrait-only liquid-sort puzzle game where colours **blend** ac
 
 | File | Purpose |
 |------|---------|
-| `www/index.html` | Entry point. Loads CSS & JS (`progression.js`, `game.js`, `monetization.js`, `coins.js`, `stuckdetect.js`, `ui.js`), defines DOM: home screen, game screen, `?debug=tubes` overlay, overlays. |
-| `www/style.css` | All styling: dark theme, glass tubes, animations, `"+"` extra tube slot, stuck pulse/tooltip, home screen, overlays, responsive breakpoints (320–500 px). |
+| `www/index.html` | Entry point. Loads CSS & JS (`progression.js`, `game.js`, `economy.js`, `monetization.js`, `coins.js`, `stuckdetect.js`, `ui.js`), defines DOM: home screen + wallet, shop overlay, game screen + HUD wallet, `?debug=tubes` overlay, win/daily coin overlays. |
+| `www/style.css` | All styling: dark theme, glass tubes, animations, wallet pills & fly-to-wallet particles, color shop modal, `"+"` extra tube slot, stuck pulse/tooltip, home screen, overlays, responsive breakpoints (320–500 px). |
 | `www/progression.js` | Data-driven realm & progression configuration (`getLevelConfig(levelNumber)`): 10 realms, 2 spare tubes (L1–30) / 1 spare tube (L31+), shorter scramble on intro & breather levels, and deterministic colour schedules. |
 | `www/game.js` | **Pure game logic** — no DOM. 12-colour wheel, unified `FUSION_TABLE`, pour rules, packed-int BFS & chunked/capped solvability checker, reverse-move level generator (requiring 0 empty start tubes with 10-try fallback to ≤1 empty, free space, ≥2 legal moves) with replay validation, daily puzzle, challenge codes, hints. |
+| `www/economy.js` | **Coin economy & ad rules** — single tunable `Economy.CONFIG` object for wallet persistence (`localStorage` in `try/catch`), earn/spend payouts, 30s/10-per-day rewarded-ad caps, interstitial gating, and shop colour palettes. |
 | `www/stuckdetect.js` | **Stuck-detection engine & Web Worker** — runs after every move off the main thread (`new Worker('stuckdetect.js')` or time-sliced chunked fallback) returning `yes` (no legal moves or solver proven unsolvable), `no`, or `unknown` (timeout/cap). |
-| `www/coins.js` | **Coins stub (`TODO`)** — localStorage-backed balance helpers (`getBalance`, `spend`, `earn`) wrapped in `try/catch`; `ui.js` uses `Economy` (`economy.js`) when present, else falls back to `Coins`. |
-| `www/ui.js` | UI layer — canvas tube rendering, 1-row (≤7 slots) / balanced 2-row (`8–14` slots, `ceil(n/2)` first row) layout centered above bottom UI, smooth FLIP re-flow, `"+"` extra tube slot with pop-in animation, WebAudio sound, haptics, settings, save/load, home screen, daily, tutorial, share card, monetization hooks. |
-| `www/monetization.js` | Mock ads & IAP stubs (`showInterstitial`, `showRewarded`, `purchaseRemoveAds`, `isAdsRemoved`, `restorePurchases`). |
-| `www/tests.html` | Browser test suite: validates colour/fusion rules, milestone levels (1, 15, 16, 30, 50, 51, 100, 150, 200, 250), 200 seeds per config (1–10 targets) through replay validation, levels 1–200 empty-tube/fallback audit, and 9-level extra `"+"` slot / orphan-free row checks. |
+| `www/coins.js` | **Coins compatibility bridge** — delegates `getBalance`, `setBalance`, `canAfford`, `spend`, `earn` to `Economy` (`economy.js`) when present, with `localStorage` fallback. |
+| `www/ui.js` | UI layer — canvas tube rendering, balanced slot FLIP layout, `"+"` extra tube slot, coin wallet count-up & fly-to-wallet particles, shop modal, free/coin/ad hints & undos, WebAudio sounds (incl. coin chimes), haptics, settings, save/load, home screen, daily, share card, monetization hooks. |
+| `www/monetization.js` | Mock ads & IAP wrappers (`purchaseRemoveAds`, `restorePurchases`, `isAdsRemoved`, `showInterstitial`, `showRewarded(reason)`, `getLastRewardedAt`, `getInterstitialCooldownRemaining`); mock overlay displays `REPLACE WITH REAL SDK`. |
+| `www/tests.html` | Automated test suite: colour/fusion rules, milestone levels, 200 seeds per config (1–10 targets) replay validation, levels 1–200 empty-tube audit, `"+"` slot checks, and economy/ad-rule checks. |
 | `www/README.md` | This file. |
 
 ## Progression & Realms (`www/progression.js`)
@@ -52,10 +53,25 @@ All fusion rules live in a single `FUSION_TABLE` object in `www/game.js` (order 
 - **Subtle stuck signal**: Runs `stuckdetect.js` off the main thread after every move (`no-legal-move` or capped BFS `30,000` nodes / `150 ms` proving unsolvable; timeout/cap = `unknown`). When stuck after move 5 (`moveCount > 5`), the `"+"` slot gently pulses/glows with a `"Need room? Tap +"` tooltip (no banners, no popups, no auto-add). Using an extra tube caps level stars at `2` and displays a small tube icon on the win screen.
 - **Responsive Slot Layout**: `slots = realTubes + (hasPlusSlot ? 1 : 0)`. Up to `7` slots fit in one row; `8–14` slots split into two rows with `ceil(slots / 2)` in the top row (never leaving a single orphan tube), centered above bottom UI with smooth FLIP re-flow animation.
 
+## Economy, Coins & Ads (`www/economy.js`, `www/monetization.js`)
+
+All coin rewards, spend costs, ad caps, and shop palette prices are defined in one `Economy.CONFIG` object in `www/economy.js`:
+
+- **Wallet**: Saved in `localStorage` (`try/catch`), rendered with an original SVG coin icon in `#home-wallet` and `#hud-wallet`, featuring a count-up animation and coin fly-to-wallet particles (disabled under Reduce Effects / `prefers-reduced-motion`).
+- **Earn**: `+10` per level win, `+10` extra for 3 stars, `+100` for clearing a realm finale (`isFinale`), and `30 + 5 × streak` (streak bonus capped at `+50`) for daily puzzles.
+- **Spend**: Extra hint `40`, 3 extra undos `30`, extra tube `100`, colour palettes `800` (shop). Every level keeps `1` free hint and `3` free undos.
+- **Rewarded Ads (`showRewarded(reason)`)**:
+  - `"Watch ad: +150 coins"` on home screen and in the shop (`30s` cooldown, max `10/day`).
+  - `"Watch ad: double coins"` on campaign win & daily done screens.
+  - `"Watch ad"` fallback for extra hint, extra undos, and extra tube when coin balance is too low.
+  - Always remains available even when `isAdsRemoved()` is `true`; mock overlay displays `REPLACE WITH REAL SDK`.
+- **Interstitials**: Every 4th level completion (`levelsCompleted > 5`), and never in the first 5 levels, never within `2 minutes` after a rewarded ad, and never during a realm finale or active celebration.
+
 ## URL Parameters
 
 - `?level=N` — jump directly to level `N`
 - `?seed=NNN` — force a specific PRNG seed
+- `?coins=1000` — set wallet coin balance for testing
 - `?forcestuck=1` — force the `"+"` slot stuck pulse & tooltip (`"Need room? Tap +"`) for testing
 - `?debug=tubes` — show live overlay `"base tubes N | extra used E/2 | slots S | stuck: yes/no/unknown | empty at start: N"`
 - `?debug=levels` — print a console table (`console.table`) of levels 1–200 plus counts of no-empty-tube vs 1-empty fallback levels and the first 10 fallback levels

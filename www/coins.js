@@ -1,36 +1,67 @@
 // ============================================================
-// HUE POUR — Coins stub (TODO: use economy.js when integrated)
+// HUE POUR — Coins Wallet Compatibility Bridge
+// Delegates to Economy when loaded; falls back safely otherwise.
 // ============================================================
 'use strict';
 
 const Coins = (() => {
   const KEY = 'hp_coins';
 
+  function _readLegacy() {
+    try {
+      if (typeof localStorage === 'undefined') return 0;
+      const v = parseInt(localStorage.getItem(KEY) || '0', 10);
+      return Number.isFinite(v) && v >= 0 ? v : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function _writeLegacy(n) {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      localStorage.setItem(KEY, String(Math.max(0, Math.floor(n))));
+    } catch (e) {}
+  }
+
   function getBalance() {
-    try { return Math.max(0, parseInt(localStorage.getItem(KEY) || '0', 10)); }
-    catch (e) { return 0; }
+    if (typeof Economy !== 'undefined' && Economy.getBalance) return Economy.getBalance();
+    return _readLegacy();
   }
 
-  function setBalance(n) {
-    try { localStorage.setItem(KEY, String(Math.max(0, n))); } catch (e) {}
+  function setBalance(amount) {
+    if (typeof Economy !== 'undefined' && Economy.setBalance) return Economy.setBalance(amount);
+    const next = Math.max(0, Math.floor(Number(amount) || 0));
+    _writeLegacy(next);
+    return next;
   }
 
-  /**
-   * Spend `amount` coins.
-   * Returns true if successful (balance deducted), false if insufficient.
-   */
+  function canAfford(amount) {
+    if (typeof Economy !== 'undefined' && Economy.canAfford) return Economy.canAfford(amount);
+    return getBalance() >= (Number(amount) || 0);
+  }
+
   function spend(amount) {
-    // TODO: integrate with economy.js when added
+    if (typeof Economy !== 'undefined' && Economy.spend) return Economy.spend(amount);
+    const n = Math.max(0, Math.floor(Number(amount) || 0));
+    if (n <= 0) return true;
     const bal = getBalance();
-    if (bal < amount) return false;
-    setBalance(bal - amount);
+    if (bal < n) return false;
+    _writeLegacy(bal - n);
     return true;
   }
 
-  /** Add coins (e.g. from rewarded ad or shop). */
   function earn(amount) {
-    setBalance(getBalance() + amount);
+    if (typeof Economy !== 'undefined' && Economy.earn) return Economy.earn(amount);
+    const n = Math.max(0, Math.floor(Number(amount) || 0));
+    const bal = getBalance() + n;
+    _writeLegacy(bal);
+    return bal;
   }
 
-  return { getBalance, spend, earn };
+  return { getBalance, setBalance, canAfford, spend, earn };
 })();
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = Coins;
+}

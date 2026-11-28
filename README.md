@@ -15,6 +15,7 @@ python -m http.server 8765
 URL debug parameters:
 - `?level=N` — jump directly to level `N`
 - `?seed=NNN` — force a specific PRNG seed
+- `?coins=1000` — set wallet coin balance for testing
 - `?forcestuck=1` — force the `"+"` tube slot pulse & `"Need room? Tap +"` tooltip for testing
 - `?debug=tubes` — show live overlay (`base tubes N | extra used E/2 | slots S | stuck: yes/no/unknown | empty at start: N`)
 - `?debug=levels` — print a `console.table` summary of levels 1–200 (`level`, `realm`, `targets`, `colors`, `tubes`, `emptyAtStart`, `fallback`, `par`) plus no-empty / fallback counts and first 10 fallback levels
@@ -52,23 +53,26 @@ URL debug parameters:
 - **Reduce effects**: Disables particles, confetti, combo flash, idle breathing, and screen shake; also respects `prefers-reduced-motion`.
 - **Audio & Saves**: All sounds synthesized via WebAudio; all `localStorage` access wrapped in `try/catch`.
 
-### Monetization (mock stubs)
-- `monetization.js` exposes `purchaseRemoveAds`, `restorePurchases`, `isAdsRemoved`, `showInterstitial`, and `showRewarded` (marked with `// REPLACE WITH REAL SDK`).
+### Economy, Coins & Monetization (`www/economy.js`, `www/monetization.js`)
+- **`Economy.CONFIG`** centralizes all tunable economy values in one config object, with `localStorage` persistence wrapped in `try/catch`, original SVG wallet pills on the home screen & HUD, count-up + fly-to-wallet animations, WebAudio coin chimes, and a Color Palettes Shop (`800` coins).
+- **Earn / Spend**: Win `+10`, 3★ `+10`, realm finale cleared `+100`, daily puzzle `30 + 5 × streak` (cap `+50`). Free per level: `1` hint and `3` undos; extra hint `40`, 3 extra undos `30`, extra tube `100` (with `"Watch ad"` fallback when balance is low).
+- **Rewarded Ads (`showRewarded(reason)`) & Interstitials**: Home & Shop `"Watch ad: +150 coins"` (`30s` cooldown, `10/day` limit), `"Watch ad: double coins"` on win screens, and optional rewarded bonuses stay available even when `adsRemoved` is `true` (mock overlay clearly marks `REPLACE WITH REAL SDK`). Interstitials keep `purchaseRemoveAds`, `restorePurchases`, `isAdsRemoved`, `showInterstitial`, and `showRewarded` exports intact while blocking interstitials in the first 5 levels, within 2 minutes of any rewarded ad, or during realm finales / celebrations.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `www/index.html` | Single-page app shell |
-| `www/style.css` | All styles (responsive 320px+, `"+"` tube slot & stuck pulse, accessibility, compact targets) |
+| `www/index.html` | Single-page app shell (home + HUD wallets, shop modal, win/daily coin controls) |
+| `www/style.css` | All styles (responsive 320px+, wallets, coin FX, shop modal, `"+"` tube slot & stuck pulse, accessibility) |
 | `www/progression.js` | Data-driven 10-realm progression and deterministic level config (`getLevelConfig`) |
 | `www/game.js` | Pure game logic: 12-color wheel, `FUSION_TABLE`, pour rules, packed-int BFS & chunked solver, reverse-move generator, replay validator |
+| `www/economy.js` | Single-config coin economy: wallet, earn/spend rules, rewarded-ad limits, interstitial gating, shop palettes |
 | `www/stuckdetect.js` | Stuck detection Web Worker (`no-legal-move` & `30k/150ms` solver -> `yes/no/unknown`) |
-| `www/coins.js` | LocalStorage coin balance stub with `TODO` for `economy.js` integration |
-| `www/ui.js` | Rendering, animation, inline `"+"` extra tube slot, balanced 7/14-slot FLIP layout, WebAudio sound, celebrations, debug URL flags, all UI |
-| `www/monetization.js` | Mock ad/IAP stubs |
-| `www/tests.html` | Automated test runner (rule checks, milestone levels 1–250, 1–10 targets × 200 seeds replay validation, 1–200 empty-tube audit, `"+"` slot / orphan checks) |
-| `www/README.md` | Detailed generator, solver, progression, `"+"` slot, and color system notes |
+| `www/coins.js` | Coin wallet bridge delegating to `Economy` with `localStorage` fallback |
+| `www/ui.js` | Rendering, animation, wallet FX & shop UI, inline `"+"` extra tube slot, balanced 7/14-slot FLIP layout, WebAudio sound, celebrations, debug URL flags, all UI |
+| `www/monetization.js` | Mock ad/IAP wrappers (`REPLACE WITH REAL SDK`), rewarded reason tags & cooldown tracking |
+| `www/tests.html` | Automated test runner (rule checks, milestone levels 1–250, 1–10 targets × 200 seeds, empty-tube audit, `"+"` slot checks, economy & ad checks) |
+| `www/README.md` | Detailed generator, solver, progression, economy, `"+"` slot, and color system notes |
 
 ## License
 

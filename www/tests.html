@@ -126,8 +126,14 @@
   <tbody id="stuck-body"></tbody>
 </table>
 
+<h2>5. Economy, Coin Wallet, Rewarded Ads &amp; Interstitial Rules</h2>
+<div class="banner" id="economy-summary">Pending…</div>
+
 <script src="progression.js"></script>
 <script src="game.js"></script>
+<script src="economy.js"></script>
+<script src="monetization.js"></script>
+<script src="coins.js"></script>
 <script src="stuckdetect.js"></script>
 <script>
 'use strict';
@@ -421,7 +427,7 @@ async function runTests() {
   btn.disabled = false;
 }
 
-window.addEventListener('load', () => { runTests(); runStuckTests(); });
+window.addEventListener('load', () => { runTests(); runStuckTests(); runEconomyTests(); });
 
 /* ===================================================================
    STARTING EMPTY-TUBE AUDIT & EXTRA "+" SLOT / STUCK TESTS
@@ -539,6 +545,92 @@ function runStuckTests() {
     ? '✓ All 9 report levels (no orphans), 1–200 empty-tube audit, and stuck detection checks passed'
     : '✗ Extra slot / stuck rescue checks failed');
   return allOk;
+}
+
+/* ===================================================================
+   ECONOMY, WALLET, REWARDED ADS & INTERSTITIAL RULES
+   =================================================================== */
+async function runEconomyTests() {
+  const banner = document.getElementById('economy-summary');
+  const errs = [];
+  function assert(cond, msg) { if (!cond) errs.push(msg); }
+
+  // Snapshot localStorage keys touched by test
+  const backup = {};
+  const keys = Object.values(Economy.CONFIG.storageKeys).concat(['hue_pour_ads_removed']);
+  keys.forEach(k => {
+    try { backup[k] = localStorage.getItem(k); } catch (_) {}
+  });
+
+  try {
+    // 1. Export integrity in monetization.js
+    ['purchaseRemoveAds', 'restorePurchases', 'isAdsRemoved', 'showInterstitial', 'showRewarded'].forEach(fn => {
+      assert(typeof Monetization[fn] === 'function', 'Monetization missing export: ' + fn);
+    });
+
+    // 2. Earn formulas from single CONFIG
+    const cfg = Economy.CONFIG;
+    assert(Economy.calcLevelEarn({ stars: 1, isFinale: false }).total === cfg.earn.levelWin, '1-star win coins mismatch');
+    assert(Economy.calcLevelEarn({ stars: 3, isFinale: false }).total === cfg.earn.levelWin + cfg.earn.threeStarsBonus, '3-star win coins mismatch');
+    assert(Economy.calcLevelEarn({ stars: 2, isFinale: true }).total === cfg.earn.levelWin + cfg.earn.realmFinaleBonus, 'Finale 2-star coins mismatch');
+    assert(Economy.calcLevelEarn({ stars: 3, isFinale: true }).total === cfg.earn.levelWin + cfg.earn.threeStarsBonus + cfg.earn.realmFinaleBonus, 'Finale 3-star coins mismatch');
+    assert(Economy.calcDailyEarn(1).total === 35, 'Daily streak 1 expected 35');
+    assert(Economy.calcDailyEarn(10).total === 80, 'Daily streak 10 expected 80');
+    assert(Economy.calcDailyEarn(25).total === 80, 'Daily streak 25 expected capped 80');
+
+    // 3. Wallet spend & coins delegation
+    Economy.setBalance(1000);
+    assert(Coins.getBalance() === 1000, 'Coins bridge balance mismatch');
+    assert(Economy.spend(cfg.spend.extraHint) && Economy.getBalance() === 960, 'Hint spend 40 failed');
+    assert(Economy.spend(cfg.spend.extraUndos) && Economy.getBalance() === 930, 'Undos spend 30 failed');
+    assert(Economy.spend(cfg.spend.extraTube) && Economy.getBalance() === 830, 'Extra tube spend 100 failed');
+    const palRes = Economy.buyPalette('pastel');
+    assert(palRes.ok && Economy.getBalance() === 30, 'Palette 800 purchase failed');
+
+    // 4. Rewarded ad +150 cooldown (30s) & daily limit (10/day)
+    localStorage.removeItem(cfg.storageKeys.rewardedAdLog);
+    const t0 = 1700000000000;
+    let claim = Economy.recordRewardedAdCoinClaim(t0);
+    assert(claim.ok && claim.earned === 150, 'First +150 ad claim failed');
+    const blockedCd = Economy.recordRewardedAdCoinClaim(t0 + 10000);
+    assert(!blockedCd.ok && blockedCd.reason === 'cooldown', '30s cooldown should block claim');
+    for (let i = 1; i < 10; i++) {
+      claim = Economy.recordRewardedAdCoinClaim(t0 + i * 31000);
+      assert(claim.ok, 'Claim ' + (i + 1) + ' should succeed');
+    }
+    const blockedCap = Economy.recordRewardedAdCoinClaim(t0 + 10 * 31000);
+    assert(!blockedCap.ok && blockedCap.reason === 'limit', 'Daily 10/day limit should block claim');
+
+    // 5. Interstitial gating (first 5 levels, finale/celebration, 2m post-rewarded)
+    assert(Economy.canShowInterstitial({ adsRemoved: false, levelsCompleted: 8, levelNum: 5, lastRewardedAt: 0 }) === false, 'Must block first 5 levels');
+    assert(Economy.canShowInterstitial({ adsRemoved: false, levelsCompleted: 8, levelNum: 15, isFinale: true, lastRewardedAt: 0 }) === false, 'Must block realm finale');
+    assert(Economy.canShowInterstitial({ adsRemoved: false, levelsCompleted: 8, levelNum: 8, isCelebrating: true, lastRewardedAt: 0 }) === false, 'Must block during celebration');
+    assert(Economy.canShowInterstitial({ adsRemoved: false, levelsCompleted: 8, levelNum: 8, lastRewardedAt: t0, now: t0 + 60000 }) === false, 'Must block within 2m after rewarded');
+    assert(Economy.canShowInterstitial({ adsRemoved: false, levelsCompleted: 8, levelNum: 8, lastRewardedAt: t0, now: t0 + 125000 }) === true, 'Should allow interstitial after 2m');
+
+    // 6. Rewarded ads STILL work even when adsRemoved is true
+    await Monetization.purchaseRemoveAds();
+    assert(Monetization.isAdsRemoved() === true, 'adsRemoved should be true');
+    assert(Economy.canShowInterstitial({ adsRemoved: true, levelsCompleted: 8, levelNum: 8, lastRewardedAt: 0 }) === false, 'Interstitial blocked when adsRemoved');
+    assert(Monetization.showRewarded.length <= 1, 'showRewarded(reason) signature compatible');
+  } finally {
+    keys.forEach(k => {
+      try {
+        if (backup[k] === null || backup[k] === undefined) localStorage.removeItem(k);
+        else localStorage.setItem(k, backup[k]);
+      } catch (_) {}
+    });
+    Monetization.init();
+  }
+
+  log('\n=== ECONOMY TESTS: ' + (errs.length ? errs.join(' | ') : 'ALL PASS') + ' ===');
+  if (banner) {
+    banner.className = 'banner ' + (errs.length ? 'bad' : 'ok');
+    banner.textContent = errs.length
+      ? '✗ Economy checks failed: ' + errs.join(' | ')
+      : '✓ Economy config, earn/spend formulas, +150 ad 30s/10-day caps, rewarded-when-adsRemoved & interstitial rules passed';
+  }
+  return errs.length === 0;
 }
 </script>
 </body>
