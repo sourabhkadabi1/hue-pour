@@ -135,7 +135,7 @@ html, body {
   display: flex; justify-content: space-between; align-items: center; gap: 6px;
 }
 .hud-row span { font-size: 13px; font-weight: 600; }
-#hud-level { color: #90caf9; font-size: 14px; }
+#hud-level { color: #90caf9; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; }
 
 .hud-buttons { margin-top: 6px; justify-content: center; gap: 8px; flex-wrap: wrap; }
 
@@ -496,4 +496,156 @@ body.reduce-effects .twinkle-star { animation: none !important; opacity: 0.3; }
   .tube-wrapper.idle-breathe { animation: none !important; }
   .combo-flash { display: none !important; }
   .star-pop { animation-duration: 0.01s !important; }
+}
+
+/* ============================================================
+   STUCK RESCUE BANNER
+   ============================================================ */
+.stuck-banner {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%) translateY(100%);
+  transition: transform 0.38s cubic-bezier(0.34, 1.56, 0.64, 1);
+  background: rgba(20, 20, 50, 0.96);
+  border-radius: 18px 18px 0 0;
+  padding: 14px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 180;
+  max-width: 440px;
+  width: 100%;
+  box-sizing: border-box;
+  border-top: 2px solid rgba(79, 195, 247, 0.35);
+  box-shadow: 0 -4px 24px rgba(0,0,0,0.5);
+  pointer-events: auto;
+}
+.stuck-banner.visible {
+  transform: translateX(-50%) translateY(0);
+}
+.stuck-banner.hidden {
+  display: none;
+}
+.stuck-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.tube-icon-svg {
+  width: 16px;
+  height: 28px;
+  display: block;
+}
+.tube-icon-svg.small {
+  width: 12px;
+  height: 21px;
+  color: #CFCFCF;
+}
+#stuck-banner-msg {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.92);
+  line-height: 1.3;
+}
+.stuck-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.stuck-add-btn {
+  min-width: 0;
+  min-height: 40px;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #4fc3f7, #2F7DF6);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  box-shadow: 0 2px 10px rgba(79,195,247,0.4);
+  transition: transform 0.12s, opacity 0.12s;
+}
+.stuck-add-btn:active { transform: scale(0.95); opacity: 0.85; }
+.stuck-coins-btn {
+  min-width: 0;
+  min-height: 40px;
+  flex-shrink: 0;
+  background: rgba(255, 193, 7, 0.16);
+  color: #ffd54f;
+  border: 1px solid rgba(255, 193, 7, 0.45);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.12s, opacity 0.12s;
+}
+.stuck-coins-btn:active { transform: scale(0.95); opacity: 0.85; }
+.stuck-add-btn:disabled,
+.stuck-coins-btn:disabled { opacity: 0.45; cursor: default; }
+.stuck-dismiss {
+  flex-shrink: 0;
+  min-width: 36px;
+  min-height: 36px;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.45);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 6px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+.stuck-dismiss:hover { color: rgba(255,255,255,0.80); }
+
+/* Smooth reflow & pop-in animation for extra tube wrapper */
+.tube-wrapper {
+  transition: width 0.25s ease, height 0.25s ease;
+}
+@keyframes tubePopIn {
+  0%   { transform: scale(0) translateY(20px); opacity: 0; }
+  60%  { transform: scale(1.12) translateY(-4px); opacity: 1; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+.tube-wrapper.tube-pop-in {
+  animation: tubePopIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Win overlay extra-tube icon */
+.win-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.win-info-row #win-info,
+.win-info-row #daily-info {
+  margin-bottom: 0;
+}
+.extra-tube-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
+  border-radius: 8px;
+  background: rgba(79, 195, 247, 0.12);
+  border: 1px solid rgba(79, 195, 247, 0.30);
+}
+
+body.reduce-effects .stuck-banner,
+body.reduce-effects .tube-wrapper { transition: none !important; }
+body.reduce-effects .tube-wrapper.tube-pop-in { animation: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  .stuck-banner,
+  .tube-wrapper { transition: none !important; }
+  .tube-wrapper.tube-pop-in { animation: none !important; }
 }

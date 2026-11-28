@@ -80,7 +80,15 @@
       <h2>🎉 Level Complete!</h2>
       <div id="cheer-text" class="cheer-text"></div>
       <div id="win-stars" class="stars"></div>
-      <p id="win-info"></p>
+      <div class="win-info-row">
+        <p id="win-info"></p>
+        <span id="win-extra-badge" class="extra-tube-badge hidden" title="Extra tube used" aria-label="Extra tube used">
+          <svg class="tube-icon-svg small" viewBox="0 0 18 34" aria-hidden="true">
+            <path d="M2 2 L2 25 A7 7 0 0 0 16 25 L16 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M9 11 L9 21 M5 16 L13 16" fill="none" stroke="#4fc3f7" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </span>
+      </div>
       <div id="win-code-box" class="code-box"></div>
       <div class="btn-row">
         <button id="btn-share-result" class="btn-secondary-sm">📤 Share</button>
@@ -96,7 +104,15 @@
     <div class="overlay-card">
       <h2>📅 Daily Complete!</h2>
       <div id="daily-stars" class="stars"></div>
-      <p id="daily-info"></p>
+      <div class="win-info-row">
+        <p id="daily-info"></p>
+        <span id="daily-extra-badge" class="extra-tube-badge hidden" title="Extra tube used" aria-label="Extra tube used">
+          <svg class="tube-icon-svg small" viewBox="0 0 18 34" aria-hidden="true">
+            <path d="M2 2 L2 25 A7 7 0 0 0 16 25 L16 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M9 11 L9 21 M5 16 L13 16" fill="none" stroke="#4fc3f7" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </span>
+      </div>
       <p id="daily-streak-line" class="streak-badge-inline"></p>
       <p id="daily-countdown-line" class="countdown-text"></p>
       <div class="btn-row">
@@ -157,11 +173,30 @@
 
   <div id="combo-flash" class="combo-flash hidden" aria-hidden="true"></div>
 
+  <!-- ===== STUCK RESCUE BANNER ===== -->
+  <div id="stuck-banner" class="stuck-banner hidden" role="alert" aria-live="polite" aria-hidden="true">
+    <span class="stuck-icon" aria-hidden="true">
+      <svg class="tube-icon-svg" viewBox="0 0 18 34">
+        <path d="M2 2 L2 25 A7 7 0 0 0 16 25 L16 2" fill="none" stroke="#CFCFCF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M9 11 L9 21 M5 16 L13 16" fill="none" stroke="#4fc3f7" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    </span>
+    <span id="stuck-banner-msg">Stuck? Add a tube</span>
+    <div id="stuck-actions" class="stuck-actions">
+      <button id="btn-add-tube" class="btn-sm stuck-add-btn">Add Tube</button>
+      <button id="btn-add-tube-coins" class="btn-sm stuck-coins-btn hidden">100 Coins</button>
+    </div>
+    <button id="btn-dismiss-stuck" class="btn-icon-sm stuck-dismiss" aria-label="Dismiss">✕</button>
+  </div>
+
   <!-- ===== TOAST ===== -->
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
+  <script src="progression.js"></script>
   <script src="game.js"></script>
   <script src="monetization.js"></script>
+  <script src="coins.js"></script>
+  <script src="stuckdetect.js"></script>
   <script src="ui.js"></script>
 </body>
 </html>

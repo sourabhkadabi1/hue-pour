@@ -1,5 +1,5 @@
 // ============================================================
-// HUE POUR — UI Layer  v6
+// HUE POUR — UI Layer  v8  (stuck rescue system)
 // New tube geometry, lip-anchored pour, volume-based liquid
 // Flat glass tubes, straight vertical stream, original doodle bg
 // GAME LOGIC (game.js, monetization.js) UNTOUCHED
@@ -681,6 +681,7 @@ function drawTubeOnCtx(ctx, cx, cy, w, h, angle, bands, waveState, opts) {
 let _tubeEls  = [];        // [{wrapper, canvas, ctx}]
 let _tubeW    = 55;
 let _tubeH    = 204;
+let _tubePadX = 10;
 let _overlayEl  = null;
 let _overlayCtx = null;
 let _waves    = {};        // tubeIdx -> {amp, phase, freq, lastT}
@@ -1119,32 +1120,41 @@ function _computeTubeSize(n) {
   const availW = Math.max(200, colW - 24);
   const aH = area.clientHeight - 16;
 
-  const rows = n <= 5 ? 1 : (n <= 10 ? 2 : 3);
-  const cols = Math.ceil(n / rows);
-  const gapFrac = cols >= 5 ? 0.44 : 0.56;
-  const rowGapFrac = rows > 2 ? 0.45 : (rows === 2 ? 0.7 : 0.6);
+  // Up to 5 tubes per row for <= 10 tubes; for 11-14 tubes use 2 rows of up to 7
+  const rows = n <= 5 ? 1 : 2;
+  const cols = n <= 5 ? n : Math.ceil(n / 2);
+  const padX = cols >= 6 ? 6 : 10;
+  const gapFrac = cols >= 6 ? 0.24 : (cols === 5 ? 0.40 : 0.56);
+  const rowGapFrac = rows === 2 ? (cols >= 6 ? 0.50 : 0.70) : 0.60;
 
-  _tubeW = Math.max(28, Math.round(colW * (n <= 10 ? 0.115 : 0.092)));
+  let w = Math.max(24, Math.round(colW * (cols >= 6 ? 0.105 : 0.115)));
 
-  // Constrain horizontally so `cols` tubes fit on one row without accidental wrapping
-  const maxWForCols = (availW - cols * 10) / (cols + (cols - 1) * gapFrac);
-  if (maxWForCols > 0 && _tubeW > maxWForCols) {
-    _tubeW = Math.max(24, Math.floor(maxWForCols));
+  // Constrain horizontally so `cols` tubes fit on each row cleanly
+  const maxWForCols = Math.floor((availW - cols * padX - 2) / (cols + (cols - 1) * gapFrac));
+  if (maxWForCols > 0 && w > maxWForCols) {
+    w = Math.max(20, maxWForCols);
   }
 
+  // Constrain vertically while maintaining height = 3.7 * width
+  if (aH > 0) {
+    const maxHForRows = Math.floor((aH - rows * 14) / (rows + (rows - 1) * rowGapFrac));
+    const maxWForRows = Math.floor(maxHForRows / 3.7);
+    if (maxWForRows > 0 && w > maxWForRows) {
+      w = Math.max(20, maxWForRows);
+    }
+  }
+
+  let GAP = Math.max(4, Math.round(w * gapFrac));
+  // Fine-tune width so exact row width never triggers accidental wrap
+  while (w > 20 && (cols * (w + padX) + (cols - 1) * GAP) > availW) {
+    w--;
+    GAP = Math.max(4, Math.round(w * gapFrac));
+  }
+
+  _tubeW = w;
   _tubeH = Math.round(_tubeW * 3.7);
-  let GAP = Math.max(6, Math.round(_tubeW * gapFrac));
-  let rowGap = Math.round(_tubeH * rowGapFrac);
-
-  // Constrain vertically so all `rows` fit cleanly inside #tube-area
-  const needH = rows * (_tubeH + 14) + (rows - 1) * rowGap;
-  if (needH > aH && aH > 0) {
-    const maxHPerTube = (aH - rows * 14) / (rows + (rows - 1) * rowGapFrac);
-    _tubeH = Math.max(88, Math.floor(maxHPerTube));
-    _tubeW = Math.max(24, Math.round(_tubeH / 3.7));
-    GAP = Math.max(6, Math.round(_tubeW * gapFrac));
-    rowGap = Math.round(_tubeH * rowGapFrac);
-  }
+  _tubePadX = padX;
+  const rowGap = Math.round(_tubeH * rowGapFrac);
 
   document.documentElement.style.setProperty('--tube-w', _tubeW + 'px');
   document.documentElement.style.setProperty('--tube-h', _tubeH + 'px');
@@ -1154,9 +1164,9 @@ function _computeTubeSize(n) {
 
 function _setupTubeCanvas(canvas) {
   const dpr = Math.min(devicePixelRatio || 1, 2);
-  const cw = (_tubeW + 10) * dpr, ch = (_tubeH + 14) * dpr;
+  const cw = (_tubeW + _tubePadX) * dpr, ch = (_tubeH + 14) * dpr;
   canvas.width = cw; canvas.height = ch;
-  canvas.style.width  = (_tubeW + 10) + 'px';
+  canvas.style.width  = (_tubeW + _tubePadX) + 'px';
   canvas.style.height = (_tubeH + 14) + 'px';
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr,0,0,dpr,0,0);
@@ -1172,7 +1182,7 @@ function _redrawBands(ti, bands) {
   const el = _tubeEls[ti];
   if (!el) return;
   const ctx = el.ctx;
-  const cW = _tubeW + 10, cH = _tubeH + 14;
+  const cW = _tubeW + _tubePadX, cH = _tubeH + 14;
   ctx.setTransform(Math.min(devicePixelRatio||1,2),0,0,Math.min(devicePixelRatio||1,2),0,0);
   ctx.clearRect(0, 0, cW, cH);
   const cx = cW / 2, cy = _tubeH + 7;
@@ -1323,6 +1333,20 @@ let _st = {
   _currentSeed: 0, _currentDiff: 1,
   _winCode: '', _winStars: 1,
   _jumpLevel: 0, _forcedSeed: undefined,
+  // ---- stuck rescue state ----
+  stuckDetected:     false,
+  extraTubesAdded:   0,
+  usedExtraTube:     false,
+  restartCount:      0,
+  _nextRestartCount: 0,
+  bestProgressScore: -Infinity,
+  lastProgressTime:  0,
+  movesAtLastRescue: 0,
+  _forceStuck:       false,
+  _addingTube:       false,
+  _hiddenAt:         0,
+  _stuckCheckSeq:    0,
+  _levelConfig:      null,
 };
 
 let _settings = { sound: true, haptics: true, colorblind: false, reduceEffects: false, volume: 0.65 };
@@ -1390,6 +1414,14 @@ const dom = {
   progressFill:     $('progress-fill'),
   progressWrap:     document.getElementById('progress-wrap'),
   winStarfield:     $('win-starfield'),
+  winExtraBadge:    $('win-extra-badge'),
+  dailyExtraBadge:  $('daily-extra-badge'),
+  // stuck rescue
+  stuckBanner:      $('stuck-banner'),
+  stuckMsg:         $('stuck-banner-msg'),
+  btnAddTube:       $('btn-add-tube'),
+  btnAddTubeCoins:  $('btn-add-tube-coins'),
+  btnDismissStuck:  $('btn-dismiss-stuck'),
 };
 
 /* ---- init ---- */
@@ -1404,7 +1436,14 @@ function _init() {
   _initBg();
   _updateProgress();
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { /* pause idle */ }
+    if (document.hidden) {
+      _st._hiddenAt = Date.now();
+    } else if (_st._hiddenAt > 0) {
+      if (_st.lastProgressTime > 0) {
+        _st.lastProgressTime += (Date.now() - _st._hiddenAt);
+      }
+      _st._hiddenAt = 0;
+    }
   });
   window.addEventListener('resize', () => {
     _initOverlay();
@@ -1419,6 +1458,26 @@ function _parseURL() {
   if (p.has('level')) { const n=parseInt(p.get('level'),10); if(n>0){_st.levelNum=n;_st._jumpLevel=n;} }
   if (p.has('seed')) _st._forcedSeed = parseInt(p.get('seed'),10);
   if (p.has('slowmo')) _slowmo = parseFloat(p.get('slowmo')) || 1.0;
+  if (p.get('debug') === 'levels') _debugPrintLevels();
+  if (p.get('forcestuck') === '1') _st._forceStuck = true;
+}
+
+function _debugPrintLevels() {
+  const rows = [];
+  for (let lvl = 1; lvl <= 200; lvl++) {
+    const lv = generateLevel(lvl, undefined, { quiet: true });
+    const cfg = lv.config || (typeof getLevelConfig === 'function' ? getLevelConfig(lvl) : null);
+    rows.push({
+      level:   lvl,
+      realm:   cfg ? cfg.realmName : '—',
+      targets: lv.target.length,
+      colors:  lv.target.map(c => COLOR_INFO[c] ? COLOR_INFO[c].name : c).join(', '),
+      tubes:   lv.tubes.length,
+      par:     lv.par,
+    });
+  }
+  if (console.table) console.table(rows);
+  else console.log(rows);
 }
 
 function _loadSave() {
@@ -1492,6 +1551,12 @@ function _bindEvents() {
   });
   dom.btnCloseSettings.addEventListener('click', () => { _showOverlay(dom.settingsOverlay,false); _persist(); });
   document.addEventListener('pointerdown', e => { if (e.target.closest('button')) Sound.btnClick(); });
+  // stuck rescue
+  dom.btnAddTube.addEventListener('click',      () => _onAddTube('primary'));
+  if (dom.btnAddTubeCoins) {
+    dom.btnAddTubeCoins.addEventListener('click', () => _onAddTube('coins'));
+  }
+  dom.btnDismissStuck.addEventListener('click', _hideStuckBanner);
 }
 
 function _showOverlay(el, show) {
@@ -1501,7 +1566,8 @@ function _showOverlay(el, show) {
 
 /* ---- home ---- */
 function _updateHome() {
-  dom.homeLevelInfo.textContent = 'Level ' + _st.levelNum;
+  const cfg = typeof getLevelConfig === 'function' ? getLevelConfig(_st.levelNum) : null;
+  dom.homeLevelInfo.textContent = 'Level ' + _st.levelNum + (cfg ? ' · ' + cfg.realmName : '');
   if (_daily.streak > 0) {
     dom.homeStreak.classList.remove('hidden');
     dom.streakNum.textContent = _daily.streak;
@@ -1524,6 +1590,9 @@ function _goHome() {
   Particles.clear(); Confetti.clear(); _waves = {};
   _comboCount = 0; _lastFuse = false;
   document.body.style.transform = '';
+  _stopStuckActivity();
+  _st.restartCount = 0;
+  _st._nextRestartCount = 0;
   dom.app.classList.add('hidden');
   dom.homeScreen.classList.remove('hidden');
   _showOverlay(dom.winOverlay, false);
@@ -1555,9 +1624,13 @@ function _startLevel(num) {
   _st.tubes = lv.tubes; _st.target = lv.target; _st.par = lv.par;
   _st.initialTubes = cloneTubes(lv.tubes);
   _st.forwardMoves = lv.forwardMoves || [];
+  _st._levelConfig = lv.config || (typeof getLevelConfig === 'function' ? getLevelConfig(num) : null);
   _st._currentSeed = lv.seed; _st._currentDiff = lv.target.length;
-  _showGame('Level ' + num);
+  _resetStuckState();
+  const title = _st._levelConfig ? ('Lv ' + num + ' · ' + _st._levelConfig.realmName) : ('Level ' + num);
+  _showGame(title);
   _renderAll(); _persist(); _maybeStartTut(num);
+  _scheduleStuckCheck({ initialCheck: true });
 }
 
 function _startDaily() {
@@ -1571,9 +1644,12 @@ function _startDaily() {
   _st.tubes = lv.tubes; _st.target = lv.target; _st.par = lv.par;
   _st.initialTubes = cloneTubes(lv.tubes);
   _st.forwardMoves = lv.forwardMoves || [];
+  _st._levelConfig = null;
   _st.dailyDayNum = lv.dayNum; _st.dailySeed = lv.seed;
   _st._currentSeed = lv.seed; _st._currentDiff = lv.target.length;
+  _resetStuckState();
   _showGame('Daily #' + lv.dayNum); _renderAll();
+  _scheduleStuckCheck({ initialCheck: true });
 }
 
 function _loadCode() {
@@ -1588,18 +1664,32 @@ function _loadCode() {
   _st.tubes = lv.tubes; _st.target = lv.target; _st.par = lv.par;
   _st.initialTubes = cloneTubes(lv.tubes);
   _st.forwardMoves = lv.forwardMoves || [];
+  _st._levelConfig = null;
   _st._currentSeed = lv.seed; _st._currentDiff = lv.difficulty;
   _waves = {}; _anim = null;
   if (_movesTimer) { clearInterval(_movesTimer); _movesTimer = null; }
+  _resetStuckState();
   _showGame('Challenge'); _renderAll(); dom.codeInput.value = '';
+  _scheduleStuckCheck({ initialCheck: true });
 }
 
 /* ---- tutorial ---- */
 function _maybeStartTut(n) {
-  if (n > 3 || _tutDone[n]) {
-    _st.tutorialActive = false; dom.tutorialBar.classList.add('hidden'); return;
+  if (n <= 3 && !_tutDone[n]) {
+    _st.tutorialActive = true;
+    dom.btnSkipTut.textContent = 'Skip';
+    _showTutHint();
+    return;
   }
-  _st.tutorialActive = true; _showTutHint();
+  _st.tutorialActive = false;
+  const cfg = _st._levelConfig;
+  if (cfg && cfg.introHint && !_tutDone[n]) {
+    dom.tutorialText.textContent = cfg.introHint;
+    dom.btnSkipTut.textContent = 'Got it';
+    dom.tutorialBar.classList.remove('hidden');
+  } else {
+    dom.tutorialBar.classList.add('hidden');
+  }
 }
 
 function _showTutHint() {
@@ -1741,22 +1831,29 @@ function _onTap(idx) {
 function _afterMove() {
   _st.hintMove = null;
   if (_st.tutorialActive) _showTutHint();
-  if (checkWin(_st.tubes, _st.target)) { _st.won = true; _onWin(); }
+  if (checkWin(_st.tubes, _st.target)) { _st.won = true; _onWin(); return; }
+  _updateProgressScore();
+  _scheduleStuckCheck();
 }
 
 /* ---- win ---- */
 function _onWin() {
   const moves = _st.moveCount, par = _st.par;
   let stars = moves <= par ? 3 : (moves <= par+3 ? 2 : 1);
+  // Extra tube caps stars at 2
+  const usedExtraTube = _st.usedExtraTube;
+  if (usedExtraTube) stars = Math.min(stars, 2);
   _st.levelsCompleted++;
   if (_st.tutorialActive) _skipTut();
+  else dom.tutorialBar.classList.add('hidden');
+  _stopStuckActivity();
   const code = encodeChallenge(_st._currentSeed, _st._currentDiff);
 
   _st._winCode = code; _st._winStars = stars;
 
   if (_st.mode === 'daily') {
     const ts = _todayStr();
-    _daily.results[ts] = { moves, par, stars, code, dayNum: _st.dailyDayNum };
+    _daily.results[ts] = { moves, par, stars, code, dayNum: _st.dailyDayNum, usedExtraTube };
     const yesterday = _dateStr(new Date(Date.now()-86400000));
     if (_daily.lastDate === yesterday || _daily.lastDate === ts) _daily.streak++;
     else _daily.streak = 1;
@@ -1769,23 +1866,26 @@ function _onWin() {
   }
   _persist();
 
-  _startCelebration(stars, moves, par, _st.target, code);
+  _startCelebration(stars, moves, par, _st.target, code, usedExtraTube);
 }
 
 function _onDailyWin(moves, par, stars, code) {
   const ts = _todayStr();
-  _daily.results[ts] = { moves, par, stars, code, dayNum: _st.dailyDayNum };
+  const usedExtraTube = _st.usedExtraTube;
+  if (usedExtraTube) stars = Math.min(stars, 2);
+  _daily.results[ts] = { moves, par, stars, code, dayNum: _st.dailyDayNum, usedExtraTube };
   const yesterday = _dateStr(new Date(Date.now()-86400000));
   if (_daily.lastDate === yesterday || _daily.lastDate === ts) _daily.streak++;
   else _daily.streak = 1;
   _daily.lastDate = ts; _st._winCode = code; _st._winStars = stars;
   _persist();
-  setTimeout(() => { _showDailyDone({ moves, par, stars, code, dayNum: _st.dailyDayNum }); Sound.win(); }, 400);
+  setTimeout(() => { _showDailyDone({ moves, par, stars, code, dayNum: _st.dailyDayNum, usedExtraTube }); Sound.win(); }, 400);
 }
 
 function _showDailyDone(r) {
   _renderStars(dom.dailyStars, r.stars);
   dom.dailyInfo.innerHTML = 'Moves: <strong>'+r.moves+'</strong> &nbsp;|&nbsp; Par: <strong>'+r.par+'</strong>';
+  if (dom.dailyExtraBadge) dom.dailyExtraBadge.classList.toggle('hidden', !r.usedExtraTube);
   dom.dailyStreakLine.textContent = '🔥 ' + _daily.streak + ' day streak';
   const now = new Date(), tmrw = new Date(now.getFullYear(),now.getMonth(),now.getDate()+1);
   const diff = tmrw-now, h=Math.floor(diff/3600000), m=Math.floor((diff%3600000)/60000), s=Math.floor((diff%60000)/1000);
@@ -1838,18 +1938,19 @@ async function _buyRemoveAds() {
 function _onUndo() {
   Sound.select();
   if (_st.animating || _st.won) return;
-  if (_st.undosLeft>0 && _st.history.length>0) {
+  if (_st.undosLeft > 0 && _st.history.length > 0) {
     _st.tubes = _st.history.pop();
-    _st.moveCount = Math.max(0,_st.moveCount-1);
+    _st.moveCount = Math.max(0, _st.moveCount - 1);
     _st.selectedTube = -1; _st.undosLeft--; _st.hintMove = null; _waves = {};
     _renderAll();
     if (_st.tutorialActive) _showTutHint();
+    _scheduleStuckCheck();
     return;
   }
   if (!_st.history.length) { Toast.show('Nothing to undo'); return; }
   Toast.show('Watch a short ad for 3 more undos');
   Monetization.showRewarded().then(ok => {
-    if (ok) { _st.undosLeft+=3; Toast.show('+3 undos!'); _renderHUD(); }
+    if (ok) { _st.undosLeft += 3; Toast.show('+3 undos!'); _renderHUD(); }
   });
 }
 
@@ -1886,21 +1987,32 @@ function _restart() {
   Particles.clear(); Confetti.clear();
   _comboCount = 0; _lastFuse = false;
   document.body.style.transform = '';
-  if (_st.mode==='daily') _startDaily();
-  else if (_st.mode==='challenge') _restartChallenge();
+  // Track restarts for condition (c) across retries of the same level
+  _st._nextRestartCount = _st.restartCount + 1;
+  _hideStuckBanner();
+  if (_st.mode === 'daily') _startDaily();
+  else if (_st.mode === 'challenge') _restartChallenge();
   else _startLevel(_st.levelNum);
 }
 
 function _restartChallenge() {
-  const lv = generateChallengeLevel(_st.challengeSeed, _st.challengeDiff); if(!lv) return;
+  const lv = generateChallengeLevel(_st.challengeSeed, _st.challengeDiff); if(!lv) { _st._nextRestartCount = 0; return; }
   _st.won=false; _st.moveCount=0; _st.history=[]; _st.selectedTube=-1; _st.animating=false;
   _st.undosLeft=_st.FREE_UNDOS; _st.hintMove=null;
   _st.tubes=lv.tubes; _st.target=lv.target; _st.par=lv.par;
   _st.initialTubes=cloneTubes(lv.tubes); _st.forwardMoves=lv.forwardMoves||[];
+  _st._levelConfig = null;
+  _resetStuckState();
   _renderAll();
+  _scheduleStuckCheck({ initialCheck: true });
 }
 
-function _nextLevel() { _st._forcedSeed=undefined; _startLevel(_st.levelNum); }
+function _nextLevel() {
+  _st._forcedSeed = undefined;
+  _st.restartCount = 0;
+  _st._nextRestartCount = 0;
+  _startLevel(_st.levelNum);
+}
 
 /* ---- date helpers ---- */
 function _todayStr() {
@@ -1912,14 +2024,380 @@ function _dateStr(d) {
 }
 
 /* ===================================================================
-   CELEBRATION SEQUENCE  (~3s after level win, tap to skip)
+   STUCK RESCUE SYSTEM
    =================================================================== */
+
+let _stuckWorker        = null;
+let _workerSupported    = (typeof Worker !== 'undefined');
+let _pendingWorkerCheck = null;   // { seq, payload } while waiting for worker reply
+let _sliceTimer         = null;
+let _progressWatchTimer = null;
+let _bannerHideTimer    = null;
+let _popInTimer         = null;
+
+/** Compute rescue rules for the active level/mode from one single helper. */
+function _getRescuePolicy() {
+  const cfg = _st._levelConfig;
+  let realm = 2;
+  if (cfg && cfg.realmIndex) {
+    realm = cfg.realmIndex;
+  } else if (_st.mode === 'challenge') {
+    const d = _st._currentDiff || 2;
+    realm = d <= 1 ? 1 : d <= 3 ? 2 : d <= 4 ? 4 : d <= 5 ? 5 : 6;
+  } else if (_st.mode === 'daily') {
+    realm = 2;
+  }
+  const maxExtra = realm <= 5 ? 1 : 2;
+  const isLevel1to10 = (_st.mode === 'level' && _st.levelNum <= 10);
+  const isFree = isLevel1to10 || (realm <= 2 && _st.extraTubesAdded === 0);
+  const canAdd = (_st.tubes.length < MAX_TUBES) && (_st.extraTubesAdded < maxExtra);
+  return { realm, maxExtra, isLevel1to10, isFree, canAdd };
+}
+
+/** Monotonic board-quality heuristic for condition (e) progress tracking. */
+function _boardProgressScore(tubes, target) {
+  const targetSet = new Set(target);
+  let score = 0;
+  for (let i = 0; i < tubes.length; i++) {
+    const t = tubes[i];
+    if (!t.length) continue;
+    score -= t.length * 4;
+    if (isTubeComplete(t) && targetSet.has(t[0])) score += 20;
+    let segs = 1;
+    for (let j = 1; j < t.length; j++) {
+      if (t[j] !== t[j - 1]) segs++;
+    }
+    score -= segs * 2;
+  }
+  return score;
+}
+
+/** Stop any pending background checks, slices, watchers, and hide banner. */
+function _stopStuckActivity() {
+  _st._stuckCheckSeq++;
+  _pendingWorkerCheck = null;
+  if (_sliceTimer) { clearTimeout(_sliceTimer); _sliceTimer = null; }
+  if (_progressWatchTimer) { clearInterval(_progressWatchTimer); _progressWatchTimer = null; }
+  if (_popInTimer) { clearTimeout(_popInTimer); _popInTimer = null; }
+  _hideStuckBanner();
+}
+
+/** Reset stuck state at the start of a level / mode. */
+function _resetStuckState() {
+  _stopStuckActivity();
+  _st.stuckDetected     = false;
+  _st.extraTubesAdded   = 0;
+  _st.usedExtraTube     = false;
+  _st.restartCount      = _st._nextRestartCount || 0;
+  _st._nextRestartCount = 0;
+  _st.movesAtLastRescue = 0;
+  _st._addingTube       = false;
+  _st._hiddenAt         = 0;
+  _st.bestProgressScore = _boardProgressScore(_st.tubes || [], _st.target || []);
+  _st.lastProgressTime  = Date.now();
+  _startProgressWatcher();
+}
+
+/** Update progress timestamp when board improves meaningfully (condition e). */
+function _updateProgressScore() {
+  const score = _boardProgressScore(_st.tubes, _st.target);
+  if (score > _st.bestProgressScore) {
+    _st.bestProgressScore = score;
+    _st.lastProgressTime  = Date.now();
+  }
+}
+
+/** Watch for 60s idle with no progress after >= 10 moves even if player stops pouring. */
+function _startProgressWatcher() {
+  if (_progressWatchTimer) clearInterval(_progressWatchTimer);
+  _progressWatchTimer = setInterval(() => {
+    if (_st.won || _st.animating || _st.mode === 'home' || document.hidden || _st.stuckDetected) return;
+    if (_st.moveCount >= 10 && _st.lastProgressTime > 0 &&
+        (Date.now() - _st.lastProgressTime) >= 60000) {
+      _scheduleStuckCheck({ ignoreForce: true });
+    }
+  }, 2000);
+}
+
+/* ---- Web Worker + Time-Sliced Chunked Solver ---- */
+function _fallbackPendingWorkerCheck() {
+  const pending = _pendingWorkerCheck;
+  _pendingWorkerCheck = null;
+  if (pending && pending.seq === _st._stuckCheckSeq) {
+    _runChunkedCheck(pending.payload);
+  }
+}
+
+function _getWorker() {
+  if (!_workerSupported) return null;
+  if (!_stuckWorker) {
+    try {
+      _stuckWorker = new Worker('stuckdetect.js');
+      _stuckWorker.addEventListener('message', _onWorkerMessage);
+      _stuckWorker.addEventListener('error', () => {
+        _workerSupported = false;
+        try { _stuckWorker.terminate(); } catch (_) {}
+        _stuckWorker = null;
+        _fallbackPendingWorkerCheck();
+      });
+    } catch (e) {
+      _workerSupported = false;
+      _stuckWorker = null;
+      return null;
+    }
+  }
+  return _stuckWorker;
+}
+
+function _onWorkerMessage(e) {
+  const r = e.data;
+  if (!r || r.type !== 'result') return;
+  if (_pendingWorkerCheck && r.seq === _pendingWorkerCheck.seq) {
+    _pendingWorkerCheck = null;
+  }
+  if (r.seq !== _st._stuckCheckSeq || _st.stuckDetected || _st.won || _st.mode === 'home') return;
+  if (r.stuck === true) _showStuckBanner(r.reason);
+}
+
+/** Time-sliced BFS fallback (~6ms per slice) so UI never freezes even without Workers. */
+function _runChunkedCheck(d) {
+  if (_sliceTimer) { clearTimeout(_sliceTimer); _sliceTimer = null; }
+  const solver = createChunkedSolver(d.tubes, d.target, StuckDetect.NODE_CAP, StuckDetect.TIME_CAP);
+  const tWallStart = Date.now();
+
+  function stepSlice() {
+    _sliceTimer = null;
+    if (d.seq !== _st._stuckCheckSeq || _st.won || _st.mode === 'home' || _st.stuckDetected) return;
+
+    const res = solver.step(600, 6);
+    if (res) {
+      const interpreted = StuckDetect.interpretSolverResult(res);
+      if (interpreted.stuck === true && !_st.stuckDetected && !_st.won) {
+        _showStuckBanner(interpreted.reason);
+      }
+      return;
+    }
+
+    // Safety wall-clock cap in case slow device spans too many slices
+    if (Date.now() - tWallStart >= 900) return;
+    _sliceTimer = setTimeout(stepSlice, 0);
+  }
+
+  _sliceTimer = setTimeout(stepSlice, 0);
+}
+
+/** Run stuck detection off the main thread (Worker or time-sliced chunks). */
+function _scheduleStuckCheck(opts) {
+  if (_st.won || _st.mode === 'home') return;
+
+  const ignoreForce = !!(opts && opts.ignoreForce);
+  const forceNow = _st._forceStuck && !ignoreForce;
+
+  const policy = _getRescuePolicy();
+  if (!policy.canAdd) return;
+
+  const seq = ++_st._stuckCheckSeq;
+  _pendingWorkerCheck = null;
+  if (_sliceTimer) { clearTimeout(_sliceTimer); _sliceTimer = null; }
+
+  const payload = {
+    type:              'check',
+    seq:               seq,
+    tubes:             cloneTubes(_st.tubes),
+    target:            _st.target.slice(),
+    par:               _st.par,
+    moveCount:         _st.moveCount,
+    restartCount:      _st.restartCount,
+    movesAtLastRescue: _st.movesAtLastRescue,
+    lastProgressTime:  _st.lastProgressTime,
+    now:               Date.now(),
+    forceStuck:        forceNow,
+  };
+
+  // Run fast O(1) / O(N^2) rules synchronously using shared StuckDetect rules
+  const fast = StuckDetect.checkFastConditions(payload);
+  if (fast !== null) {
+    if (fast.stuck === true && !_st.stuckDetected) {
+      _showStuckBanner(fast.reason);
+    }
+    return;
+  }
+
+  // Condition (b): off-main-thread capped solver (30k nodes / 150ms)
+  const worker = _getWorker();
+  if (worker) {
+    _pendingWorkerCheck = { seq, payload };
+    try {
+      worker.postMessage(payload);
+    } catch (e) {
+      _pendingWorkerCheck = null;
+      _workerSupported = false;
+      _runChunkedCheck(payload);
+    }
+  } else {
+    _runChunkedCheck(payload);
+  }
+}
+
+/* ---- Banner show / hide ---- */
+function _showStuckBanner(reason) {
+  if (_st.stuckDetected || _st.won || _st.mode === 'home') return;
+  const policy = _getRescuePolicy();
+  if (!policy.canAdd) return;
+
+  _st.stuckDetected = true;
+  if (_bannerHideTimer) { clearTimeout(_bannerHideTimer); _bannerHideTimer = null; }
+
+  if (dom.stuckMsg) {
+    dom.stuckMsg.textContent = policy.isFree
+      ? 'Stuck? Add a tube (Free)'
+      : 'Stuck? Add a tube';
+  }
+  if (dom.btnAddTube) {
+    dom.btnAddTube.disabled = _st._addingTube;
+    dom.btnAddTube.textContent = policy.isFree ? 'Add Tube' : '📺 Free (Ad)';
+  }
+  if (dom.btnAddTubeCoins) {
+    dom.btnAddTubeCoins.disabled = _st._addingTube;
+    dom.btnAddTubeCoins.classList.toggle('hidden', policy.isFree);
+    dom.btnAddTubeCoins.textContent = '100 Coins';
+  }
+
+  if (dom.stuckBanner) {
+    dom.stuckBanner.classList.remove('hidden');
+    dom.stuckBanner.setAttribute('aria-hidden', 'false');
+    requestAnimationFrame(() => {
+      if (dom.stuckBanner && dom.stuckBanner.getAttribute('aria-hidden') === 'false') {
+        dom.stuckBanner.classList.add('visible');
+      }
+    });
+  }
+}
+
+function _hideStuckBanner() {
+  if (!dom.stuckBanner) return;
+  if (_bannerHideTimer) { clearTimeout(_bannerHideTimer); _bannerHideTimer = null; }
+  dom.stuckBanner.classList.remove('visible');
+  dom.stuckBanner.setAttribute('aria-hidden', 'true');
+  if (_reducedMotion()) {
+    dom.stuckBanner.classList.add('hidden');
+  } else {
+    _bannerHideTimer = setTimeout(() => {
+      _bannerHideTimer = null;
+      if (dom.stuckBanner) dom.stuckBanner.classList.add('hidden');
+    }, 400);
+  }
+}
+
+/* ---- Add Tube handler ---- */
+async function _onAddTube(choice) {
+  if (_st._addingTube || _st.won || _st.animating || _st.mode === 'home') return;
+
+  const policy = _getRescuePolicy();
+  if (_st.tubes.length >= MAX_TUBES) {
+    Toast.show('Maximum tube count reached (' + MAX_TUBES + ')');
+    _hideStuckBanner();
+    return;
+  }
+  if (_st.extraTubesAdded >= policy.maxExtra) {
+    Toast.show('No more extra tubes for this level');
+    _hideStuckBanner();
+    return;
+  }
+
+  if (!policy.isFree) {
+    if (choice === 'coins') {
+      const bal = typeof Coins !== 'undefined' ? Coins.getBalance() : 0;
+      if (typeof Coins === 'undefined' || !Coins.spend(100)) {
+        Toast.show('Need 100 coins (have ' + bal + ') — watch an ad instead!');
+        return;
+      }
+      Toast.show('-100 coins · Extra tube added!');
+    } else {
+      _st._addingTube = true;
+      if (dom.btnAddTube) dom.btnAddTube.disabled = true;
+      if (dom.btnAddTubeCoins) dom.btnAddTubeCoins.disabled = true;
+      let ok = false;
+      try { ok = await Monetization.showRewarded(); }
+      finally {
+        _st._addingTube = false;
+        if (dom.btnAddTube) dom.btnAddTube.disabled = false;
+        if (dom.btnAddTubeCoins) dom.btnAddTubeCoins.disabled = false;
+      }
+      if (_st.won || _st.mode === 'home') return;
+      if (!ok) { Toast.show('Watch the ad to add a tube'); return; }
+    }
+  }
+
+  // Clear any raised selected tube before reflowing layout
+  if (_st.selectedTube >= 0 && _tubeEls[_st.selectedTube]) {
+    _tubeEls[_st.selectedTube].wrapper.style.transition = '';
+    _tubeEls[_st.selectedTube].wrapper.style.transform = '';
+    _st.selectedTube = -1;
+  }
+
+  // Add the empty tube and append an empty slot to history snapshots so
+  // undoing any move (including moves into the extra tube) preserves layout cleanly
+  _st.tubes.push([]);
+  for (let i = 0; i < _st.history.length; i++) {
+    if (Array.isArray(_st.history[i])) _st.history[i].push([]);
+  }
+  _st.extraTubesAdded++;
+  _st.usedExtraTube     = true;
+  _st.movesAtLastRescue = _st.moveCount;
+  _st.restartCount      = 0;
+  _st.lastProgressTime  = Date.now();
+  _st.bestProgressScore = _boardProgressScore(_st.tubes, _st.target);
+
+  // Append new wrapper before _renderTubesAll() so flexbox re-flows smoothly
+  // while keeping the pop-in animation on only the newly added tube
+  const area = document.getElementById('tube-area');
+  const ti   = _st.tubes.length - 1;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'tube-wrapper' + (_reducedMotion() ? '' : ' tube-pop-in');
+  wrapper.setAttribute('role', 'button');
+  wrapper.setAttribute('aria-label', 'Tube ' + (ti + 1) + ' (extra)');
+  wrapper.addEventListener('click', () => _onTap(ti));
+  const canvas = document.createElement('canvas');
+  canvas.className = 'tube-canvas';
+  wrapper.appendChild(canvas);
+  if (area) area.appendChild(wrapper);
+  _tubeEls.push({ wrapper, canvas, ctx: null });
+
+  _renderTubesAll();
+
+  if (!_reducedMotion()) {
+    const clearPop = () => wrapper.classList.remove('tube-pop-in');
+    wrapper.addEventListener('animationend', clearPop, { once: true });
+    if (_popInTimer) clearTimeout(_popInTimer);
+    _popInTimer = setTimeout(() => { _popInTimer = null; clearPop(); }, 460);
+  }
+
+  _hideStuckBanner();
+  Sound.ding(880);
+  if (policy.isFree) Toast.show('Extra tube added!');
+
+  // Re-run stuck detection normally afterward
+  _st.stuckDetected = false;
+  _scheduleStuckCheck({ ignoreForce: true });
+}
+
+/* ===================================================================
+   END STUCK RESCUE
+   =================================================================== */
+
 const _CHEERS = ['GREAT!', 'BRILLIANT!', 'SPLENDID!', 'AMAZING!'];
 
-function _startCelebration(stars, moves, par, target, code) {
+function _startCelebration(stars, moves, par, target, code, usedExtraTube) {
   if (_reducedMotion()) {
-    setTimeout(() => _showWinOverlayAnimated(stars, moves, par, code,
-      stars === 3 ? 'PERFECT!' : _CHEERS[Math.floor(Math.random()*_CHEERS.length)]), 300);
+    setTimeout(() => {
+      if (_st.mode === 'daily') {
+        _showDailyDone(_daily.results[_todayStr()]);
+      } else {
+        _showWinOverlayAnimated(stars, moves, par, code,
+          stars === 3 ? 'PERFECT!' : _CHEERS[Math.floor(Math.random()*_CHEERS.length)], usedExtraTube);
+      }
+    }, 300);
     Sound.win();
     return;
   }
@@ -1927,6 +2405,7 @@ function _startCelebration(stars, moves, par, target, code) {
   _celeb = {
     startTime: performance.now(),
     stars: stars, moves: moves, par: par, code: code, colors: colors, target: target,
+    usedExtraTube: !!usedExtraTube,
     cheer: stars === 3 ? 'PERFECT!' : _CHEERS[Math.floor(Math.random()*_CHEERS.length)],
     tubeCount: _tubeEls.length,
     HOP_INT: 140, CONFETTI_T: 300, SHOCK_T: 500, BANNER_T: 1000, END_T: 2800,
@@ -2023,13 +2502,13 @@ function _finishCelebration() {
   if (_st.mode === 'daily') {
     _showDailyDone(_daily.results[_todayStr()]);
   } else {
-    _showWinOverlayAnimated(c.stars, c.moves, c.par, c.code, c.cheer);
+    _showWinOverlayAnimated(c.stars, c.moves, c.par, c.code, c.cheer, c.usedExtraTube);
   }
   Sound.win();
   _maybeInterstitial();
 }
 
-function _showWinOverlayAnimated(stars, moves, par, code, cheer) {
+function _showWinOverlayAnimated(stars, moves, par, code, cheer, usedExtraTube) {
   _populateStarfield();
   var ct = dom.cheerText;
   if (ct) {
@@ -2039,6 +2518,9 @@ function _showWinOverlayAnimated(stars, moves, par, code, cheer) {
   }
   dom.winCodeBox.textContent = code;
   dom.winInfo.innerHTML = 'Moves: <strong>0</strong> &nbsp;|&nbsp; Par: <strong>' + par + '</strong>';
+  if (dom.winExtraBadge) {
+    dom.winExtraBadge.classList.toggle('hidden', !usedExtraTube);
+  }
   if (!Monetization.isAdsRemoved() && _st.levelsCompleted > 5) dom.btnRemoveAdsWin.classList.remove('hidden');
   _showOverlay(dom.winOverlay, true);
   setTimeout(function(){ if(ct) ct.classList.add('show'); }, 80);

@@ -65,17 +65,17 @@ for (const result of Object.keys(FUSION_TABLE)) {
   FUSION[b + '|' + a] = result;
 }
 
-/* Compact 1-char codes for fast BFS solver */
-const _COLOR_TO_CHAR = {};
+/* Compact integer codes (1..12) and fusion lookup for fast BFS solver */
+const _COLOR_TO_INT = {};
 for (let i = 0; i < ALL_COLORS.length; i++) {
-  _COLOR_TO_CHAR[ALL_COLORS[i]] = String.fromCharCode(65 + i); // 'A'..'L'
+  _COLOR_TO_INT[ALL_COLORS[i]] = i + 1; // 1..12 (4-bit non-zero)
 }
-const _CHAR_FUSION = {};
+const _INT_FUSION = new Uint8Array(256);
 for (const result of Object.keys(FUSION_TABLE)) {
   const [a, b] = FUSION_TABLE[result];
-  const ca = _COLOR_TO_CHAR[a], cb = _COLOR_TO_CHAR[b], cr = _COLOR_TO_CHAR[result];
-  _CHAR_FUSION[ca + cb] = cr;
-  _CHAR_FUSION[cb + ca] = cr;
+  const ia = _COLOR_TO_INT[a], ib = _COLOR_TO_INT[b], ir = _COLOR_TO_INT[result];
+  _INT_FUSION[(ia << 4) | ib] = ir;
+  _INT_FUSION[(ib << 4) | ia] = ir;
 }
 
 /* ========== COLOUR DISPLAY INFO ========== */
@@ -205,52 +205,84 @@ function hashState(tubes) {
   return parts.join('|');
 }
 
-/* ========== SOLVER (BFS, compact string states, normalised hash) ========== */
+/* ========== SOLVER (BFS, packed 20-bit tube states, normalised hash) ========== */
 function _encodeWinTarget(target) {
-  const arr = new Array(target.length);
-  for (let i = 0; i < target.length; i++) arr[i] = _COLOR_TO_CHAR[target[i]];
+  const arr = new Int32Array(target.length);
+  for (let i = 0; i < target.length; i++) arr[i] = _COLOR_TO_INT[target[i]] * 0x1111;
   arr.sort();
-  return arr.join('');
+  return arr;
 }
 
-function _isEncodedWin(state, targetSortedStr, targetCount) {
-  const cols = [];
+function _isEncodedWin(state, targetSortedRaw, targetCount, colsScratch) {
+  let wi = 0;
   for (let i = 0; i < state.length; i++) {
-    const s = state[i];
-    const len = s.length;
-    if (len === 0) continue;
-    if (len !== TUBE_CAPACITY) return false;
-    const c0 = s[0];
-    if (s[1] !== c0 || s[2] !== c0 || s[3] !== c0) return false;
-    cols.push(c0);
+    const v = state[i];
+    if (v === 0) continue;
+    if ((v >>> 16) !== TUBE_CAPACITY) return false;
+    const raw = v & 0xFFFF;
+    if (raw !== (raw & 15) * 0x1111) return false;
+    if (wi >= targetCount) return false;
+    colsScratch[wi++] = raw;
   }
-  if (cols.length !== targetCount) return false;
-  cols.sort();
-  return cols.join('') === targetSortedStr;
+  if (wi !== targetCount) return false;
+  colsScratch.sort();
+  for (let i = 0; i < targetCount; i++) {
+    if (colsScratch[i] !== targetSortedRaw[i]) return false;
+  }
+  return true;
 }
 
-function solve(tubes, target, nodeLimit) {
-  if (nodeLimit === undefined) nodeLimit = 200000;
+/** Check whether any legal pour exists in `tubes`. */
+function hasLegalMove(tubes) {
+  const n = tubes.length;
+  for (let si = 0; si < n; si++) {
+    for (let di = 0; di < n; di++) {
+      if (si === di) continue;
+      if (analyzePour(tubes, si, di).type !== 'illegal') return true;
+    }
+  }
+  return false;
+}
 
-  if (checkWin(tubes, target)) return { moves: [], nodeCount: 0 };
+/**
+ * Create an incremental BFS solver so both synchronous calls and
+ * time-sliced main-thread checks share identical traversal & pruning.
+ * Each tube is packed as `(len << 16) | c0 | (c1 << 4) | (c2 << 8) | (c3 << 12)`
+ * with non-zero colour IDs `1..12` (valid for `TUBE_CAPACITY === 4`).
+ *
+ * `step(maxSliceNodes, maxSliceMs)` returns null while work remains, or:
+ *   { status: 'solved',     moves, nodeCount }
+ *   { status: 'unsolvable', moves: null, nodeCount }  (queue exhausted)
+ *   { status: 'capped',     moves: null, nodeCount }  (nodeLimit reached)
+ *   { status: 'timeout',    moves: null, nodeCount }  (timeLimitMs reached)
+ */
+function createChunkedSolver(tubes, target, nodeLimit, timeLimitMs) {
+  if (nodeLimit === undefined) nodeLimit = 200000;
+  if (timeLimitMs === undefined) timeLimitMs = 0;
+
+  if (checkWin(tubes, target)) {
+    const done = { status: 'solved', moves: [], nodeCount: 0 };
+    return { step: () => done };
+  }
 
   const n = tubes.length;
-  const targetSortedStr = _encodeWinTarget(target);
   const targetCount = target.length;
+  const targetSortedRaw = _encodeWinTarget(target);
+  const colsScratch = new Int32Array(targetCount);
 
-  const initState = new Array(n);
+  const initState = new Int32Array(n);
   for (let i = 0; i < n; i++) {
-    let s = '';
     const t = tubes[i];
-    for (let j = 0; j < t.length; j++) s += _COLOR_TO_CHAR[t[j]];
-    initState[i] = s;
+    let v = (t.length << 16);
+    for (let j = 0; j < t.length; j++) v |= (_COLOR_TO_INT[t[j]] << (j << 2));
+    initState[i] = v;
   }
 
-  // Reusable scratch buffer for insertion-sorting canonical keys (zero GC)
-  const tmp = initState.slice();
+  // Reusable scratch buffer for insertion-sorting canonical 16-bit tube keys
+  const tmp = new Array(n);
   function canonicalKey(arr, si, newSrc, di, newDst) {
-    for (let i = 0; i < n; i++) tmp[i] = arr[i];
-    if (si >= 0) { tmp[si] = newSrc; tmp[di] = newDst; }
+    for (let i = 0; i < n; i++) tmp[i] = arr[i] & 0xFFFF;
+    if (si >= 0) { tmp[si] = newSrc & 0xFFFF; tmp[di] = newDst & 0xFFFF; }
     for (let i = 1; i < n; i++) {
       const key = tmp[i];
       let j = i - 1;
@@ -260,95 +292,163 @@ function solve(tubes, target, nodeLimit) {
       }
       tmp[j + 1] = key;
     }
-    let h = tmp[0];
-    for (let i = 1; i < n; i++) h += '|' + tmp[i];
-    return h;
+    return String.fromCharCode.apply(null, tmp);
   }
 
   const visited = new Set();
-  visited.add(canonicalKey(initState, -1, '', -1, ''));
+  visited.add(canonicalKey(initState, -1, 0, -1, 0));
 
   const queue = [{ state: initState, parent: null, src: -1, dst: -1, type: null }];
-  let head = 0, nodeCount = 0;
+  let head = 0, nodeCount = 0, totalWorkMs = 0;
+  let result = null;
 
-  while (head < queue.length && nodeCount < nodeLimit) {
-    const cur = queue[head++];
-    nodeCount++;
-    const cs = cur.state;
+  function step(maxSliceNodes, maxSliceMs) {
+    if (result) return result;
+    const sliceLimit = maxSliceNodes > 0 ? maxSliceNodes : Infinity;
+    const timed = (maxSliceMs > 0 || timeLimitMs > 0);
+    const sliceStart = timed ? Date.now() : 0;
+    let sliceNodes = 0;
 
-    for (let si = 0; si < n; si++) {
-      const srcStr = cs[si];
-      const sLen = srcStr.length;
-      if (!sLen) continue;
-
-      const sTop = srcStr[sLen - 1];
-      let block = 1;
-      for (let k = sLen - 2; k >= 0; k--) {
-        if (srcStr[k] === sTop) block++; else break;
+    while (head < queue.length && nodeCount < nodeLimit && sliceNodes < sliceLimit) {
+      if (timed && (sliceNodes & 63) === 63) {
+        const sliceElapsed = Date.now() - sliceStart;
+        if (maxSliceMs > 0 && sliceElapsed >= maxSliceMs) {
+          totalWorkMs += sliceElapsed;
+          if (timeLimitMs > 0 && totalWorkMs >= timeLimitMs) {
+            result = { status: 'timeout', moves: null, nodeCount };
+            return result;
+          }
+          return null; // yield slice cleanly without marking done
+        }
+        if (timeLimitMs > 0 && (totalWorkMs + sliceElapsed) >= timeLimitMs) {
+          totalWorkMs += sliceElapsed;
+          result = { status: 'timeout', moves: null, nodeCount };
+          return result;
+        }
       }
-      if (sLen === TUBE_CAPACITY && block === TUBE_CAPACITY) continue;
 
-      const srcUniform = (block === sLen);
-      let emptyUsedSrc = false;
+      const cur = queue[head++];
+      nodeCount++;
+      sliceNodes++;
+      const cs = cur.state;
 
-      for (let di = 0; di < n; di++) {
-        if (si === di) continue;
-        const dstStr = cs[di];
-        const dLen = dstStr.length;
+      for (let si = 0; si < n; si++) {
+        const sv = cs[si];
+        const sLen = sv >>> 16;
+        if (sLen === 0) continue;
 
-        let newSrc, newDst, moveType;
+        const sShift = (sLen - 1) << 2;
+        const sTop = (sv >>> sShift) & 15;
+        let block = 1;
+        for (let sh = sShift - 4; sh >= 0; sh -= 4) {
+          if (((sv >>> sh) & 15) === sTop) block++; else break;
+        }
+        if (sLen === TUBE_CAPACITY && block === TUBE_CAPACITY) continue;
 
-        if (dLen === 0) {
-          if (emptyUsedSrc || srcUniform) continue;
-          emptyUsedSrc = true;
-          newSrc = srcStr.slice(0, sLen - block);
-          newDst = srcStr.slice(sLen - block);
-          moveType = 'move';
-        } else {
-          const dTop = dstStr[dLen - 1];
-          if (dTop === sTop) {
-            const free = TUBE_CAPACITY - dLen;
-            if (free <= 0) continue;
-            const u = block < free ? block : free;
-            newSrc = srcStr.slice(0, sLen - u);
-            newDst = dstStr + srcStr.slice(sLen - u);
+        const srcUniform = (block === sLen);
+        let emptyUsedSrc = false;
+
+        for (let di = 0; di < n; di++) {
+          if (si === di) continue;
+          const dv = cs[di];
+          const dLen = dv >>> 16;
+
+          let newSrc, newDst, moveType, newDstLen;
+
+          if (dLen === 0) {
+            if (emptyUsedSrc || srcUniform) continue;
+            emptyUsedSrc = true;
+            const remLen = sLen - block;
+            const remSh = remLen << 2;
+            newSrc = (remLen << 16) | (sv & ((1 << remSh) - 1));
+            newDst = (block << 16) | ((sv & 0xFFFF) >>> remSh);
+            newDstLen = block;
             moveType = 'move';
           } else {
-            const fused = _CHAR_FUSION[sTop + dTop];
-            if (!fused) continue;
-            newSrc = srcStr.slice(0, sLen - 1);
-            newDst = dstStr.slice(0, dLen - 1) + fused;
-            moveType = 'fuse';
+            const dTop = (dv >>> ((dLen - 1) << 2)) & 15;
+            if (dTop === sTop) {
+              const free = TUBE_CAPACITY - dLen;
+              if (free <= 0) continue;
+              const u = block < free ? block : free;
+              const remLen = sLen - u;
+              const remSh = remLen << 2;
+              const moved = ((sv & 0xFFFF) >>> remSh) & ((1 << (u << 2)) - 1);
+              newSrc = (remLen << 16) | (sv & ((1 << remSh) - 1));
+              newDst = ((dLen + u) << 16) | (dv & 0xFFFF) | (moved << (dLen << 2));
+              newDstLen = dLen + u;
+              moveType = 'move';
+            } else {
+              const fused = _INT_FUSION[(sTop << 4) | dTop];
+              if (!fused) continue;
+              const remLen = sLen - 1;
+              const dstTopSh = (dLen - 1) << 2;
+              newSrc = (remLen << 16) | (sv & ((1 << (remLen << 2)) - 1));
+              newDst = (dLen << 16) | ((dv & 0xFFFF) & ~(15 << dstTopSh)) | (fused << dstTopSh);
+              newDstLen = dLen;
+              moveType = 'fuse';
+            }
           }
-        }
 
-        const h = canonicalKey(cs, si, newSrc, di, newDst);
-        if (visited.has(h)) continue;
-        visited.add(h);
+          const h = canonicalKey(cs, si, newSrc, di, newDst);
+          if (visited.has(h)) continue;
+          visited.add(h);
 
-        const nextState = cs.slice();
-        nextState[si] = newSrc;
-        nextState[di] = newDst;
+          const nextState = cs.slice();
+          nextState[si] = newSrc;
+          nextState[di] = newDst;
 
-        const node = { state: nextState, parent: cur, src: si, dst: di, type: moveType };
-        if (newDst.length === TUBE_CAPACITY &&
-            (newSrc.length === 0 || newSrc.length === TUBE_CAPACITY) &&
-            _isEncodedWin(nextState, targetSortedStr, targetCount)) {
-          const moves = [];
-          let p = node;
-          while (p.parent) {
-            moves.push({ src: p.src, dst: p.dst, type: p.type });
-            p = p.parent;
+          const node = { state: nextState, parent: cur, src: si, dst: di, type: moveType };
+          const newSrcLen = newSrc >>> 16;
+          if (newDstLen === TUBE_CAPACITY &&
+              (newSrcLen === 0 || newSrcLen === TUBE_CAPACITY) &&
+              _isEncodedWin(nextState, targetSortedRaw, targetCount, colsScratch)) {
+            const moves = [];
+            let p = node;
+            while (p.parent) {
+              moves.push({ src: p.src, dst: p.dst, type: p.type });
+              p = p.parent;
+            }
+            moves.reverse();
+            result = { status: 'solved', moves, nodeCount };
+            return result;
           }
-          moves.reverse();
-          return { moves, nodeCount };
-        }
 
-        queue.push(node);
+          queue.push(node);
+        }
       }
     }
+
+    if (timed) totalWorkMs += Date.now() - sliceStart;
+    if (head >= queue.length) {
+      result = { status: 'unsolvable', moves: null, nodeCount };
+      return result;
+    }
+    if (nodeCount >= nodeLimit) {
+      result = { status: 'capped', moves: null, nodeCount };
+      return result;
+    }
+    if (timeLimitMs > 0 && totalWorkMs >= timeLimitMs) {
+      result = { status: 'timeout', moves: null, nodeCount };
+      return result;
+    }
+    return null; // yielded due to maxSliceNodes
   }
-  return null;
+
+  return { step };
+}
+
+/**
+ * Check solvability with explicit distinction between proven 'unsolvable'
+ * and resource-limited 'timeout' / 'capped' (unknown).
+ */
+function checkSolvability(tubes, target, nodeLimit, timeLimitMs) {
+  return createChunkedSolver(tubes, target, nodeLimit || 30000, timeLimitMs || 150)
+    .step(Infinity, 0);
+}
+
+function solve(tubes, target, nodeLimit) {
+  const res = createChunkedSolver(tubes, target, nodeLimit, 0).step(Infinity, 0);
+  return res.status === 'solved' ? { moves: res.moves, nodeCount: res.nodeCount } : null;
 }
 
 /* ========== REPLAY VALIDATION ========== */
@@ -444,7 +544,7 @@ function scramble(tubes, numMoves, rng) {
   // Keep a small amount of free space so players have room to pour at level start
   let totalFree = 0;
   for (let i = 0; i < n; i++) totalFree += tubeFreeSpace(cur[i]);
-  const minKeepFree = totalFree >= 8 ? 3 : (totalFree >= 4 ? 1 : 0);
+  const minKeepFree = totalFree >= 12 ? 3 : (totalFree >= 8 ? 2 : (totalFree >= 4 ? 1 : 0));
 
   let unfuseCount = 0;
   let lastSplitFrom = -1, lastSplitTo = -1;
@@ -568,27 +668,30 @@ function scramble(tubes, numMoves, rng) {
 
 /* Capped solver limit during level generation (deterministic, < 150ms on a phone) */
 function _genSolveNodeLimit(numTargets) {
-  if (numTargets <= 2) return 12000;
-  if (numTargets === 3) return 3500;
-  return 1200;
+  if (numTargets <= 2) return 8000;
+  if (numTargets === 3) return 1800;
+  return 700;
 }
 
 /**
  * Generate a level. Deterministic for a given (levelNum, forcedSeed).
- * Returns { levelNum, seed, tubes, target, par, forwardMoves }.
+ * Uses progression.js getLevelConfig(levelNum) when available.
+ * Returns { levelNum, seed, tubes, target, par, forwardMoves, config }.
  */
-function generateLevel(levelNum, forcedSeed) {
+function generateLevel(levelNum, forcedSeed, opts) {
   const baseSeed = forcedSeed !== undefined ? forcedSeed : (levelNum * 31337 + 7919);
   const maxAttempts = 80;
+  const quiet = opts && opts.quiet;
+  const cfg = typeof getLevelConfig === 'function' ? getLevelConfig(levelNum) : null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const seed = baseSeed + attempt;
     const rng  = mulberry32(seed);
 
-    const target    = targetForLevel(levelNum, rng);
-    const empties   = emptyTubesForLevel(levelNum, target.length);
+    const target    = cfg ? cfg.targetColors.slice() : targetForLevel(levelNum, rng);
+    const empties   = cfg ? cfg.emptyTubes : emptyTubesForLevel(levelNum, target.length);
     const solved    = buildSolvedState(target, empties);
-    const nScramble = scrambleMoveCount(levelNum);
+    const nScramble = cfg ? cfg.scrambleDepth : scrambleMoveCount(levelNum);
     const { tubes: scrambled, forwardMoves } = scramble(solved, nScramble, rng);
 
     if (checkWin(scrambled, target)) continue;           // already solved
@@ -614,20 +717,25 @@ function generateLevel(levelNum, forcedSeed) {
     // For very early levels, reject too-long solutions
     if (levelNum <= 3 && par > 12) continue;
 
-    console.log(
-      'Level ' + levelNum + ': seed=' + seed +
-      ', par=' + par + ', targets=' + target.length
-    );
-    return { levelNum, seed, tubes: scrambled, target, par, forwardMoves };
+    if (!quiet) {
+      console.log(
+        'Level ' + levelNum +
+        (cfg ? ' (' + cfg.realmName + ')' : '') +
+        ': seed=' + seed + ', par=' + par + ', targets=' + target.length
+      );
+    }
+    return { levelNum, seed, tubes: scrambled, target, par, forwardMoves, config: cfg };
   }
 
-  // Fallback preserving target count and replay validation
-  console.warn('Level ' + levelNum + ': fallback after ' + maxAttempts + ' attempts');
+  // Fallback preserving config target count/colors and replay validation
+  if (!quiet) {
+    console.warn('Level ' + levelNum + ': fallback after ' + maxAttempts + ' attempts');
+  }
   for (let attempt = 0; attempt < 20; attempt++) {
     const seed   = baseSeed + maxAttempts + attempt;
     const rng    = mulberry32(seed);
-    const target = targetForLevel(levelNum, rng);
-    const empties = emptyTubesForLevel(levelNum, target.length);
+    const target = cfg ? cfg.targetColors.slice() : targetForLevel(levelNum, rng);
+    const empties = cfg ? cfg.emptyTubes : emptyTubesForLevel(levelNum, target.length);
     const solved = buildSolvedState(target, empties);
     const { tubes: sc, forwardMoves } = scramble(solved, Math.max(6, target.length * 4), rng);
     if (checkWin(sc, target)) continue;
@@ -638,18 +746,18 @@ function generateLevel(levelNum, forcedSeed) {
       const sol = solve(sc, target, _genSolveNodeLimit(target.length));
       if (sol && sol.moves.length < par) par = sol.moves.length;
     }
-    return { levelNum, seed, tubes: sc, target, par: Math.max(par, 1), forwardMoves };
+    return { levelNum, seed, tubes: sc, target, par: Math.max(par, 1), forwardMoves, config: cfg };
   }
 
   // Last-resort deterministic valid state
   const rng = mulberry32(baseSeed);
-  const target = targetForLevel(levelNum, rng);
-  const empties = emptyTubesForLevel(levelNum, target.length);
+  const target = cfg ? cfg.targetColors.slice() : targetForLevel(levelNum, rng);
+  const empties = cfg ? cfg.emptyTubes : emptyTubesForLevel(levelNum, target.length);
   const solved = buildSolvedState(target, empties);
   const { tubes: sc, forwardMoves } = scramble(solved, 4, rng);
   return {
     levelNum, seed: baseSeed, tubes: sc, target,
-    par: Math.max(forwardMoves.length, 1), forwardMoves,
+    par: Math.max(forwardMoves.length, 1), forwardMoves, config: cfg,
   };
 }
 

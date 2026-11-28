@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Hue Pour — Generator &amp; Rules Tests</title>
+  <title>Hue Pour — Generator, Progression &amp; Rules Tests</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -11,7 +11,7 @@
       background: #0d0d2b; color: #e0e0e0; padding: 16px;
     }
     h1 { font-size: 22px; margin-bottom: 8px; color: #90caf9; }
-    h2 { font-size: 16px; margin: 16px 0 8px; color: #4fc3f7; }
+    h2 { font-size: 16px; margin: 18px 0 8px; color: #4fc3f7; }
     .summary { margin-bottom: 12px; font-size: 14px; color: #aaa; line-height: 1.5; }
     .controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
     .btn {
@@ -28,7 +28,7 @@
     .banner.ok  { border-color: rgba(105,240,174,0.45); color: #69f0ae; }
     .banner.bad { border-color: rgba(255,82,82,0.45);   color: #ff5252; }
     table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
-    th, td { border: 1px solid #2b2b4d; padding: 7px 10px; text-align: center; font-size: 13px; }
+    th, td { border: 1px solid #2b2b4d; padding: 7px 8px; text-align: center; font-size: 12px; }
     th { background: rgba(255,255,255,0.05); color: #90caf9; }
     tfoot td { font-weight: 700; background: rgba(255,255,255,0.04); }
     .pass { color: #69f0ae; }
@@ -46,10 +46,11 @@
 </head>
 <body>
 
-<h1>Hue Pour — Generator &amp; Rules Test Suite</h1>
+<h1>Hue Pour — Generator, Progression &amp; Rules Test Suite</h1>
 <p class="summary">
-  Verifies the 12-colour wheel, fusion table rules, and runs <strong>200 seeds per target config (1–10 targets)</strong>,
-  replaying each recorded forward solution against real pour rules and reporting pass/fail counts and slowest generation time.
+  Verifies the 12-colour wheel, fusion table rules, <strong>progression.js</strong> realm schedules &amp; milestone levels
+  (1, 15, 16, 30, 50, 51, 100, 150, 200, 250), and runs <strong>200 seeds per target config (1–10 targets)</strong>
+  through replay validation.
 </p>
 
 <div class="controls">
@@ -62,7 +63,28 @@
 <h2>1. Colour &amp; Fusion Rules</h2>
 <div class="banner" id="rules-banner">Pending…</div>
 
-<h2>2. Generator Replay Validation (200 seeds × 1–10 targets)</h2>
+<h2>2. Progression &amp; Milestone Levels (1, 15, 16, 30, 50, 51, 100, 150, 200, 250)</h2>
+<div class="banner" id="prog-banner">Pending…</div>
+<table id="milestones">
+  <thead>
+    <tr>
+      <th>Level</th>
+      <th>Realm</th>
+      <th>Flags</th>
+      <th>Targets</th>
+      <th>Empty</th>
+      <th>Tubes</th>
+      <th>Scramble</th>
+      <th>Par</th>
+      <th>Target Colours</th>
+      <th>ms</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody id="milestones-body"></tbody>
+</table>
+
+<h2>3. Generator Replay Validation (200 seeds × 1–10 targets)</h2>
 <table id="results">
   <thead>
     <tr>
@@ -85,23 +107,45 @@
 <h2>Log</h2>
 <div id="log"></div>
 
+<h2>4. Stuck Rescue — Level Config Checks (?forcestuck=1 flags: 1, 16, 51, 101)</h2>
+<div class="banner" id="stuck-summary">Pending…</div>
+<table id="stuck-table">
+  <thead>
+    <tr>
+      <th>Level</th>
+      <th>Realm</th>
+      <th>Tubes</th>
+      <th>Par</th>
+      <th>Max extra</th>
+      <th>Cost rule</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody id="stuck-body"></tbody>
+</table>
+
+<script src="progression.js"></script>
 <script src="game.js"></script>
+<script src="stuckdetect.js"></script>
 <script>
 'use strict';
 
 const SEEDS_PER_CONFIG = 200;
+const MILESTONE_LEVELS = [1, 15, 16, 30, 50, 51, 100, 150, 200, 250];
 
 // Representative level number for each target count (1..10)
 const LEVEL_FOR_TARGETS = {
-  1: 3,    2: 10,   3: 20,   4: 30,   5: 40,
-  6: 55,   7: 70,   8: 85,   9: 100,  10: 115,
+  1: 3,    2: 10,   3: 20,   4: 35,   5: 80,
+  6: 105,  7: 130,  8: 155,  9: 180,  10: 200,
 };
 
 const logEl   = document.getElementById('log');
 const tbody   = document.getElementById('results-body');
 const tfoot   = document.getElementById('results-foot');
+const msBody  = document.getElementById('milestones-body');
 const progEl  = document.getElementById('progress');
 const rulesEl = document.getElementById('rules-banner');
+const progBan = document.getElementById('prog-banner');
 const sumEl   = document.getElementById('summary-banner');
 
 function log(msg) {
@@ -164,6 +208,85 @@ function runRuleChecks() {
   }
 }
 
+function runProgressionAndMilestoneChecks() {
+  msBody.innerHTML = '';
+  const errs = [];
+  const tertSet = new Set(TERTIARIES);
+
+  // Check progression schedule invariants for levels 1..250
+  let prev = null;
+  for (let lvl = 1; lvl <= 250; lvl++) {
+    const cfg = getLevelConfig(lvl);
+    if (cfg.targetColors.length !== cfg.targets) errs.push('L' + lvl + ': targetColors length mismatch');
+    if (cfg.targets + cfg.emptyTubes > MAX_TUBES) errs.push('L' + lvl + ': tubes > 14');
+    if (cfg.realmIndex === 4) {
+      const tCnt = cfg.targetColors.filter(c => tertSet.has(c)).length;
+      if (tCnt < 2) errs.push('L' + lvl + ': Desert Oasis < 2 tertiaries');
+    }
+    if (prev) {
+      const sa = prev.targetColors.slice().sort().join(',');
+      const sb = cfg.targetColors.slice().sort().join(',');
+      if (sa === sb) errs.push('L' + lvl + ': identical targets to L' + (lvl - 1));
+    }
+    prev = cfg;
+  }
+
+  let msPass = 0, msFail = 0;
+  for (const lvl of MILESTONE_LEVELS) {
+    const cfg = getLevelConfig(lvl);
+    const t0 = performance.now();
+    const lv = generateLevel(lvl, undefined, { quiet: true });
+    const elapsed = performance.now() - t0;
+
+    const replay = lv && lv.tubes && lv.forwardMoves
+      ? replayMoves(lv.tubes, lv.forwardMoves, lv.target)
+      : { success: false };
+
+    const valid = !!(
+      replay.success &&
+      lv.target.length === cfg.targets &&
+      lv.tubes.length === cfg.targets + cfg.emptyTubes &&
+      lv.tubes.length <= MAX_TUBES &&
+      lv.par >= 3
+    );
+
+    if (valid) msPass++; else msFail++;
+    if (!valid) errs.push('Milestone level ' + lvl + ' invalid');
+
+    const flags = [];
+    if (cfg.isIntro) flags.push('Intro');
+    if (cfg.isBreather) flags.push('Breather');
+    if (cfg.isFinale) flags.push('Finale');
+
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + lvl + '</td>' +
+      '<td>' + cfg.realmIndex + '. ' + cfg.realmName + '</td>' +
+      '<td>' + (flags.join(', ') || 'Normal') + '</td>' +
+      '<td>' + cfg.targets + '</td>' +
+      '<td>' + cfg.emptyTubes + '</td>' +
+      '<td>' + lv.tubes.length + '</td>' +
+      '<td>' + cfg.scrambleDepth + '</td>' +
+      '<td>' + lv.par + '</td>' +
+      '<td style="text-align:left;font-size:11px">' + lv.target.join(', ') + '</td>' +
+      '<td>' + elapsed.toFixed(2) + '</td>' +
+      '<td class="' + (valid ? 'pass' : 'fail') + '">' + (valid ? '✓ PASS' : '✗ FAIL') + '</td>';
+    msBody.appendChild(tr);
+
+    log('Milestone L' + lvl + ' (' + cfg.realmName + '): ' +
+        (valid ? 'PASS' : 'FAIL') + ' targets=' + cfg.targets +
+        ' empty=' + cfg.emptyTubes + ' par=' + lv.par +
+        ' (' + elapsed.toFixed(2) + ' ms)');
+  }
+
+  const ok = errs.length === 0 && msFail === 0;
+  progBan.className = 'banner ' + (ok ? 'ok' : 'bad');
+  progBan.textContent = ok
+    ? '✓ All ' + msPass + '/' + MILESTONE_LEVELS.length + ' milestone levels (1, 15, 16, 30, 50, 51, 100, 150, 200, 250) and 250-level realm invariants passed.'
+    : '✗ Progression check failed: ' + errs.join('; ');
+  return ok;
+}
+
 async function runTests() {
   const btn = document.getElementById('btn-run');
   btn.disabled = true;
@@ -175,7 +298,8 @@ async function runTests() {
   sumEl.textContent = 'Running tests…';
 
   const rulesOk = runRuleChecks();
-  log('Starting generator tests: ' + SEEDS_PER_CONFIG + ' seeds per config (1–10 targets)...\n');
+  const progOk  = runProgressionAndMilestoneChecks();
+  log('\nStarting generator tests: ' + SEEDS_PER_CONFIG + ' seeds per config (1–10 targets)...\n');
 
   const totalConfigs = 10;
   let totalPass = 0, totalFail = 0, globalSlowest = 0, globalTotalMs = 0;
@@ -204,7 +328,7 @@ async function runTests() {
       const t0 = performance.now();
       let ok = false;
       try {
-        const lv = generateLevel(levelNum, seed);
+        const lv = generateLevel(levelNum, seed, { quiet: true });
         if (!lv || !lv.tubes || !lv.target) {
           log('  FAIL target=' + numTargets + ' seed=' + seed + ': no level returned');
         } else if (lv.target.length !== numTargets) {
@@ -274,16 +398,16 @@ async function runTests() {
       '<td>' + (globalTotalMs / totalSeeds).toFixed(2) + '</td>' +
       '<td class="' + (globalSlowest > 150 ? 'fail' : '') + '">' + globalSlowest.toFixed(2) + '</td>' +
       '<td>—</td>' +
-      '<td class="' + (totalFail === 0 && rulesOk ? 'pass' : 'fail') + '">' +
-        (totalFail === 0 && rulesOk ? '✓ ALL PASS' : '✗ FAIL') +
+      '<td class="' + (totalFail === 0 && rulesOk && progOk ? 'pass' : 'fail') + '">' +
+        (totalFail === 0 && rulesOk && progOk ? '✓ ALL PASS' : '✗ FAIL') +
       '</td>' +
     '</tr>';
 
   progEl.style.width = '100%';
-  const allOk = rulesOk && totalFail === 0;
+  const allOk = rulesOk && progOk && totalFail === 0;
   sumEl.className = 'banner ' + (allOk ? 'ok' : 'bad');
   sumEl.textContent = (allOk ? '✓ ' : '✗ ') +
-    totalPass + '/' + totalSeeds + ' seeds passed replay validation · ' +
+    totalPass + '/' + totalSeeds + ' seeds + ' + MILESTONE_LEVELS.length + ' milestones passed · ' +
     'Slowest generation: ' + globalSlowest.toFixed(2) + ' ms ' +
     '(target < 150 ms on phone)';
 
@@ -291,7 +415,120 @@ async function runTests() {
   btn.disabled = false;
 }
 
-window.addEventListener('load', () => { runTests(); });
+window.addEventListener('load', () => { runTests(); runStuckTests(); });
+
+/* ===================================================================
+   STUCK RESCUE SYSTEM TESTS
+   =================================================================== */
+function runStuckTests() {
+  const STUCK_LEVELS = [1, 16, 51, 101];
+  const tbody = document.getElementById('stuck-body');
+  const sumEl = document.getElementById('stuck-summary');
+  if (!tbody || !sumEl) return;
+  tbody.innerHTML = '';
+  let allOk = true;
+
+  // 1. Level-specific configs (1, 16, 51, 101) + adding extra tube preserves solvability/limits
+  STUCK_LEVELS.forEach(function(lvl) {
+    const cfg = getLevelConfig(lvl);
+    const lv  = generateLevel(lvl, undefined, { quiet: true });
+
+    const realm     = cfg ? cfg.realmIndex : 1;
+    const realmOk   = (realm >= 1 && realm <= 10);
+    const maxExtra  = realm <= 5 ? 1 : 2;
+    const tubeCount = lv.tubes.length;
+    const tubeOk    = (tubeCount >= 2 && tubeCount <= 14 && (tubeCount + maxExtra) <= 14);
+    const par       = lv.par;
+    const parOk     = (par > 0);
+    const forcedRes = StuckDetect.checkFastConditions({
+      tubes: lv.tubes, target: lv.target, par, moveCount: 0,
+      restartCount: 0, lastProgressTime: Date.now(), now: Date.now(), forceStuck: true,
+    });
+    const forcedOk = !!(forcedRes && forcedRes.stuck === true && forcedRes.reason === 'forced');
+
+    // Verify 5-move guard blocks early moves (moves 1..5)
+    const guardRes = StuckDetect.checkFastConditions({
+      tubes: lv.tubes, target: lv.target, par, moveCount: 5,
+      restartCount: 2, lastProgressTime: 0, now: Date.now(), forceStuck: false,
+    });
+    const guardOk = !!(guardRes && guardRes.stuck === false);
+
+    // Verify replay with added extra empty tube still wins cleanly with identical forwardMoves
+    const withExtra = cloneTubes(lv.tubes);
+    withExtra.push([]);
+    const extraReplayOk = replayMoves(withExtra, lv.forwardMoves, lv.target).success;
+
+    const rowOk = realmOk && tubeOk && parOk && forcedOk && guardOk && extraReplayOk;
+    if (!rowOk) allOk = false;
+
+    const costStr = lvl <= 10 ? 'Free (auto)' : realm <= 2 ? '1st free' : 'ad / 100 coins';
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + lvl + '</td>' +
+      '<td>' + (cfg ? cfg.realmName : '?') + ' (' + realm + ')</td>' +
+      '<td>' + tubeCount + '</td>' +
+      '<td>' + par + '</td>' +
+      '<td>max ' + maxExtra + '</td>' +
+      '<td>' + costStr + '</td>' +
+      '<td class="' + (rowOk ? 'pass' : 'fail') + '">' + (rowOk ? '✓ OK' : '✗ FAIL') + '</td>';
+    tbody.appendChild(tr);
+  });
+
+  // 2. Verify all 5 stuck conditions (a..e) and solver timeout => unknown (null)
+  const deadEndTubes = [
+    ['RED', 'BLUE', 'YELLOW', 'GREEN'],
+    ['YELLOW', 'RED', 'BLUE', 'ORANGE'],
+  ];
+  const condA = StuckDetect.checkFastConditions({
+    tubes: deadEndTubes, target: ['ORANGE'], par: 5, moveCount: 6,
+    restartCount: 0, lastProgressTime: Date.now(), now: Date.now(), forceStuck: false,
+  });
+  const condAOk = !!(condA && condA.stuck === true && condA.reason === 'no-legal-move');
+
+  // Condition (b): legal move exists (RED <-> empty/RED), but cannot make ORANGE -> proven unsolvable
+  const softLockTubes = [['RED', 'RED'], ['RED', 'RED'], []];
+  const solveUn = checkSolvability(softLockTubes, ['ORANGE'], 30000, 150);
+  const condB   = StuckDetect.interpretSolverResult(solveUn);
+  const condBOk = (solveUn.status === 'unsolvable' && condB.stuck === true && condB.reason === 'unsolvable');
+
+  // Condition (b) timeout / node-capped -> unknown (null), NOT stuck!
+  const l101 = generateLevel(101, undefined, { quiet: true });
+  const solveCap = checkSolvability(l101.tubes, l101.target, 25, 150);
+  const capRes   = StuckDetect.interpretSolverResult(solveCap);
+  const capOk    = (capRes.stuck === null);
+
+  // Condition (c): 2 restarts after >5 moves
+  const condC = StuckDetect.checkFastConditions({
+    tubes: l101.tubes, target: l101.target, par: l101.par, moveCount: 6,
+    restartCount: 2, lastProgressTime: Date.now(), now: Date.now(), forceStuck: false,
+  });
+  const condCOk = !!(condC && condC.stuck === true && condC.reason === 'restarts');
+
+  // Condition (d): moves > 2.5 * par
+  const condD = StuckDetect.checkFastConditions({
+    tubes: l101.tubes, target: l101.target, par: 10, moveCount: 26,
+    restartCount: 0, lastProgressTime: Date.now(), now: Date.now(), forceStuck: false,
+  });
+  const condDOk = !!(condD && condD.stuck === true && condD.reason === 'over-par');
+
+  // Condition (e): 60s with no progress after >= 10 moves
+  const nowMs = Date.now();
+  const condE = StuckDetect.checkFastConditions({
+    tubes: l101.tubes, target: l101.target, par: 30, moveCount: 10,
+    restartCount: 0, lastProgressTime: nowMs - 61000, now: nowMs, forceStuck: false,
+  });
+  const condEOk = !!(condE && condE.stuck === true && condE.reason === 'no-progress');
+
+  allOk = allOk && condAOk && condBOk && capOk && condCOk && condDOk && condEOk;
+  log('Stuck rescue checks: (a)=' + condAOk + ' (b)=' + condBOk + ' (cap=>null)=' + capOk +
+      ' (c)=' + condCOk + ' (d)=' + condDOk + ' (e)=' + condEOk);
+
+  sumEl.className = 'banner ' + (allOk ? 'ok' : 'bad');
+  sumEl.textContent = (allOk
+    ? '✓ Stuck rescue: levels 1, 16, 51, 101 & all 5 conditions passed'
+    : '✗ Stuck rescue: some checks failed');
+  return allOk;
+}
 </script>
 </body>
 </html>
